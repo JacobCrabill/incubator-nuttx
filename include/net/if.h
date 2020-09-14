@@ -141,12 +141,26 @@ struct mii_ioctl_data_s
  * SIOCxCANBITRATE ioctl commands.
  */
 
-struct can_ioctl_data_s
+struct can_ioctl_bitrate_s
 {
   uint16_t arbi_bitrate; /* Classic CAN / Arbitration phase bitrate kbit/s */
   uint16_t arbi_samplep; /* Classic CAN / Arbitration phase input % */
   uint16_t data_bitrate; /* Data phase bitrate kbit/s */
   uint16_t data_samplep; /* Data phase sample point % */
+};
+
+/* Structure passed to add or remove hardware-level CAN ID filters
+ * SIOCxCANBITRATE ioctl commands.
+ */
+
+struct can_ioctl_filter_s
+{
+  uint32_t fid1;  /* 11- or 29-bit ID (context dependent).  For dual match or
+                   * for the lower address in a range of addresses  */
+  uint32_t fid2;  /* 11- or 29-bit ID.  For dual match, address mask or for
+                   * upper address in address range  */
+  uint8_t  ftype; /* See CAN_FILTER_* definitions */
+  uint8_t  fprio; /* See CAN_MSGPRIO_* definitions */
 };
 
 /* There are two forms of the I/F request structure.
@@ -173,7 +187,7 @@ struct lifreq
     uint8_t                   lifru_flags;              /* Interface flags */
     struct mii_ioctl_notify_s llfru_mii_notify;         /* PHY event notification */
     struct mii_ioctl_data_s   lifru_mii_data;           /* MII request data */
-    struct can_ioctl_data_s   lifru_can_data;           /* CAN bitrate request data */
+    struct can_ioctl_bitrate_s   lifru_can_data;           /* CAN bitrate request data */
   } lifr_ifru;
 };
 
@@ -215,17 +229,18 @@ struct ifreq
   int16_t                     ifr_ifindex;              /* Interface index */
   union
   {
-    struct sockaddr           ifru_addr;                /* IP Address */
-    struct sockaddr           ifru_dstaddr;             /* P-to-P Address */
-    struct sockaddr           ifru_broadaddr;           /* Broadcast address */
-    struct sockaddr           ifru_netmask;             /* Netmask */
-    struct sockaddr           ifru_hwaddr;              /* MAC address */
-    int                       ifru_count;               /* Number of devices */
-    int                       ifru_mtu;                 /* MTU size */
-    uint8_t                   ifru_flags;               /* Interface flags */
-    struct mii_ioctl_notify_s ifru_mii_notify;          /* PHY event notification */
-    struct mii_ioctl_data_s   ifru_mii_data;            /* MII request data */
-    struct can_ioctl_data_s   ifru_can_data;            /* CAN bitrate request data */
+    struct sockaddr             ifru_addr;                /* IP Address */
+    struct sockaddr             ifru_dstaddr;             /* P-to-P Address */
+    struct sockaddr             ifru_broadaddr;           /* Broadcast address */
+    struct sockaddr             ifru_netmask;             /* Netmask */
+    struct sockaddr             ifru_hwaddr;              /* MAC address */
+    int                         ifru_count;               /* Number of devices */
+    int                         ifru_mtu;                 /* MTU size */
+    uint8_t                     ifru_flags;               /* Interface flags */
+    struct mii_ioctl_notify_s   ifru_mii_notify;          /* PHY event notification */
+    struct mii_ioctl_data_s     ifru_mii_data;            /* MII request data */
+    struct can_ioctl_bitrate_s  ifru_can_data;         /* CAN bitrate request data */
+    struct can_ioctl_filter_s   ifru_can_filter;          /* CAN filter request data */
   } ifr_ifru;
 };
 
