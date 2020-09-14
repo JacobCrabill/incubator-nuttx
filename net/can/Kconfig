@@ -31,7 +31,7 @@ config NET_CAN_HAVE_ERRORS
 	default n
 
 config CAN_CONNS
-	int "Number of CAN connections"
+	int "Max number of CAN socket connections"
 	default 4
 	---help---
 		Maximum number of CAN connections (all tasks).
@@ -90,6 +90,35 @@ config NET_CAN_RAW_DEFAULT_TX_DEADLINE
 		NET_CAN_RAW_TX_DEADLINE flag, can block the TX mailboxes forever.
 		This config can set the default deadline when no deadline has been
 		given.
+
+config NET_CAN_SILENT
+	bool "Silent CAN bus / test mode"
+	#int "Enable silent (listen-only) mode"
+	#default 0
+	---help---
+		Value = 1:
+		  Put the transceiver into listen-only mode. In this mode, the
+		  transceiver will data and remote frames, but will not send any
+		  frames and will not acknowledge frames from other nodes (Tx pin
+		  disconnected)
+		  Can be combined with NET_CAN_LOOPBACK to test the node without
+		  connecting to an external CAN bus.
+
+		Value = 2:
+		  Put the transceiver into listen-only mode. In this mode, the
+		  transceiver will data and remote frames and give acknowledgement
+		  to valid frames, but will not send any frames.
+		
+		TODO
+
+config NET_CAN_LOOPBACK
+	bool "CAN loopback"
+	default no
+	---help---
+		Enable CAN frame loopback (at the hardware level if supported;
+		otherwise implemented in software).
+
+		TODO
 
 config NET_CAN_RAW_FILTER_MAX
 	int "CAN_RAW_FILTER max filter count"

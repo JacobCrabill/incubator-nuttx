@@ -5,6 +5,9 @@
 *.d
 !*.d/
 *.dSYM
+*.ddc
+*.dds
+*.ddx
 *.elf
 *.exe
 *.gcno
@@ -23,6 +26,7 @@
 *.srec
 *.swp
 *.sym
+*.tmp
 *.wsp
 *.ddc
 *~
@@ -32,10 +36,11 @@
 /.cproject
 /.gdbinit
 /.project
+/.vscode
 /.version
 /_SAVED_APPS_config
 /cscope.*
-/defconfig
+# /defconfig
 /Make.defs
 /nuttx
 /nuttx-*

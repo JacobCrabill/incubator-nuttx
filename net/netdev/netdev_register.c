@@ -465,7 +465,7 @@ int netdev_register(FAR struct net_driver_s *dev, enum net_lltype_e lltype)
             dev->d_mac.ether.ether_addr_octet[5],
             dev->d_ifname);
 #else
-      ninfo("Registered dev: %s\n", dev->d_ifname);
+      ninfo("Registered device: %s\n", dev->d_ifname);
 #endif
       return OK;
     }
