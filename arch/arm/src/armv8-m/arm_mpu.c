@@ -53,6 +53,138 @@ static uint8_t g_region;
  ****************************************************************************/
 
 /****************************************************************************
+ * Name: mpu_subregion_ms
+ *
+ * Description:
+ *   Given (1) the size of the memory to be mapped and (2) the log2 size
+ *   of the mapping to use, determine the minimal sub-region set at the
+ *   to be disabled at the higher end of the region.
+ *
+ * Assumption:
+ *   l2size has the same properties as the return value from
+ *   mpu_log2regionceil()
+ *
+ ****************************************************************************/
+
+static inline uint32_t mpu_subregion_ms(size_t size, uint8_t l2size)
+{
+  unsigned int nsrs;
+  uint32_t     asize;
+  uint32_t     mask;
+
+  /* Examples with l2size = 12:
+   *
+   *         Shifted Adjusted        Number      Sub-Region
+   * Size    Mask    Size      Shift Sub-Regions Bitset
+   * 0x1000  0x01ff  0x1000    9     8           0x00
+   * 0x0c00  0x01ff  0x0c00    9     6           0xc0
+   * 0x0c40  0x01ff  0x0e00    9     7           0x80
+   */
+
+  if (l2size < 32)
+    {
+      mask  = ((1 << l2size) - 1) >> 3; /* Shifted mask */
+    }
+
+  /* The 4Gb region size is a special case */
+
+  else
+    {
+      /* NOTE: There is no way to represent a 4Gb region size in the 32-bit
+       * input.
+       */
+
+      mask = 0x1fffffff;          /* Shifted mask */
+    }
+
+  asize = (size + mask) & ~mask;  /* Adjusted size */
+  nsrs  = asize >> (l2size - 3);  /* Number of subregions */
+  return g_ms_regionmask[nsrs];
+}
+
+/****************************************************************************
+ * Name: mpu_subregion_ls
+ *
+ * Description:
+ *   Given (1) the offset to the beginning of data in the region and (2) the
+ *   log2 size of the mapping to use, determine the minimal sub-region set
+ *   to span that memory region sub-region set at the to be disabled at the
+ *   lower end of the region
+ *
+ * Assumption:
+ *   l2size has the same properties as the return value from
+ *   mpu_log2regionceil()
+ *
+ ****************************************************************************/
+
+static inline uint32_t mpu_subregion_ls(size_t offset, uint8_t l2size)
+{
+  unsigned int nsrs;
+  uint32_t     aoffset;
+  uint32_t     mask;
+
+  /* Examples with l2size = 12:
+   *
+   *         Shifted Adjusted        Number      Sub-Region
+   * Offset  Mask    Offset    Shift Sub-Regions Bitset
+   * 0x0000  0x01ff  0x0000    9     8           0x00
+   * 0x0400  0x01ff  0x0400    9     6           0x03
+   * 0x02c0  0x01ff  0x0200    9     7           0x01
+   */
+
+  if (l2size < 32)
+    {
+      mask  = ((1 << l2size)-1) >> 3; /* Shifted mask */
+    }
+
+  /* The 4Gb region size is a special case */
+
+  else
+    {
+      /* NOTE: There is no way to represent a 4Gb region size in the 32-bit
+       * input.
+       */
+
+      mask = 0x1fffffff;              /* Shifted mask */
+    }
+
+  aoffset = offset & ~mask;           /* Adjusted offset */
+  nsrs    = aoffset >> (l2size - 3);  /* Number of subregions */
+  return g_ls_regionmask[nsrs];
+}
+
+/****************************************************************************
+ * Name: mpu_reset_internal
+ *
+ * Description:
+ *   Resets the MPU to disabled.
+ *
+ ****************************************************************************/
+
+#if defined(CONFIG_MPU_RESET) || defined(CONFIG_ARM_MPU_EARLY_RESET)
+static void mpu_reset_internal()
+{
+  int region;
+  int regions;
+  regions = (getreg32(MPU_TYPE) & MPU_TYPE_DREGION_MASK)
+                                  >> MPU_TYPE_DREGION_SHIFT;
+
+  for (region = 0; region < regions; region++)
+    {
+      putreg32(region, MPU_RNR);
+      putreg32(0, MPU_RASR);
+      putreg32(0, MPU_RBAR);
+    }
+
+  putreg32(0, MPU_CTRL);
+}
+#endif
+
+/****************************************************************************
+ * Public Functions
+ ****************************************************************************/
+
+/****************************************************************************
  * Name: mpu_allocregion
  *
  * Description:
