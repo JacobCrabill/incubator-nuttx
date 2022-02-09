@@ -39,7 +39,61 @@
  ****************************************************************************/
 
 /****************************************************************************
- * Name: uart_recvchars_check_special
+ * Name: uart_check_signo
+ *
+ * Description:
+ *   Check if the SIGINT or SIGTSTP character is in the contiguous Rx DMA
+ *   buffer region.  The first signal associated with the first such
+ *   character is returned.
+ *
+ *   If there multiple such characters in the buffer, only the signal
+ *   associated with the first is returned (this a bug!)
+ *
+ * Returned Value:
+ *   0 if a signal-related character does not appear in the.  Otherwise,
+ *   SIGKILL or SIGTSTP may be returned to indicate the appropriate signal
+ *   action.
+ *
+ ****************************************************************************/
+
+#if defined(CONFIG_SERIAL_RXDMA) && \
+    (defined(CONFIG_TTY_SIGINT) || defined(CONFIG_TTY_SIGTSTP) || \
+     defined(CONFIG_TTY_FORCE_PANIC))
+static int uart_check_signo(int pid, const char *buf, size_t size)
+{
+  size_t i;
+
+  for (i = 0; i < size; i++)
+    {
+#ifdef CONFIG_TTY_FORCE_PANIC
+      if (buf[i] == CONFIG_TTY_FORCE_PANIC_CHAR)
+        {
+          PANIC();
+          return 0;
+        }
+#endif
+
+#ifdef CONFIG_TTY_SIGINT
+      if (pid > 0 && buf[i] == CONFIG_TTY_SIGINT_CHAR)
+        {
+          return SIGINT;
+        }
+#endif
+
+#ifdef CONFIG_TTY_SIGTSTP
+      if (pid > 0 && buf[i] == CONFIG_TTY_SIGTSTP_CHAR)
+        {
+          return SIGTSTP;
+        }
+#endif
+    }
+
+  return 0;
+}
+#endif
+
+/****************************************************************************
+ * Name: uart_recvchars_signo
  *
  * Description:
  *   Check if the SIGINT character is anywhere in the newly received DMA
