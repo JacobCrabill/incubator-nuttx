@@ -1,5 +1,5 @@
 /************************************************************************************************************
- * arch/arm/src/stm32h6/hardware/stm32_fdcan.h
+ * arch/arm/src/stm32h7/hardware/stm32_fdcan.h
  *
  *   Copyright (C) 2020 Jacob Crabill. All rights reserved.
  *   Author: Jacob Crabill <jacob@volansi.com>
@@ -33,8 +33,8 @@
  *
  ************************************************************************************************************/
 
-#ifndef __ARCH_ARM_SRC_STM32H7_HARDWARE_STM32_FLEXCAN_H
-#define __ARCH_ARM_SRC_STM32H7_HARDWARE_STM32_FLEXCAN_H
+#ifndef __ARCH_ARM_SRC_STM32H7_HARDWARE_STM32_FDCAN_H
+#define __ARCH_ARM_SRC_STM32H7_HARDWARE_STM32_FDCAN_H
 
 /************************************************************************************************************
  * Included Files
@@ -48,12 +48,6 @@
 /*                 Flexible Datarate Controller Area Network                  */
 /*                                                                            */
 /******************************************************************************/
-
-/******************************************************************************
-        ---------------- TODO --------------
-******************************************************************************/
-// Define all registers in the following form:
-#define STM32_FDCAN_xxx_OFFSET   0x123456 /* Description */
 
 /* Register Offsets *****************************************************************************************/
 
@@ -1597,4 +1591,4 @@
 #define FDCANCCU_IE_CSCE_MASK        (0x1U << FDCANCCU_IE_CSCE_SHIFT)           /*!< 0x00000002 */
 #define FDCANCCU_IE_CSCE             FDCANCCU_IE_CSCE_MASK                      /*!<Calibration State Changed Enable       */
 
-#endif /* __ARCH_ARM_SRC_STM32H7_HARDWARE_STM32_FLEXCAN_H */
+#endif /* __ARCH_ARM_SRC_STM32H7_HARDWARE_STM32_FDCAN_H */
