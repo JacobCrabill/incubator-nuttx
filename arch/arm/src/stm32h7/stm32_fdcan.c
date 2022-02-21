@@ -18,7 +18,7 @@
  *
  ****************************************************************************/
 
-/****************************************************************************
+/***************************presdiv*************************************************
  * Included Files
  ****************************************************************************/
 
@@ -41,9 +41,8 @@
 #include <nuttx/net/netdev.h>
 #include <nuttx/net/can.h>
 
-#include "up_arch.h"
+#include "arm_arch.h"
 #include "chip.h"
-#include "stm32h7_config.h"
 #include "hardware/stm32_fdcan.h"
 #include "hardware/stm32_pinmap.h"
 #include "stm32_fdcan.h"
@@ -52,6 +51,10 @@
 
 #ifdef CONFIG_NET_CMSG
 #include <sys/time.h>
+#endif
+
+#ifndef OK
+#define OK 0
 #endif
 
 #ifdef CONFIG_STM32H7_FDCAN
@@ -220,10 +223,21 @@ struct fdcan_timeseg
   uint32_t bitrate;
   int32_t samplep;
   uint8_t propseg;
+  uint8_t sjw; /// TODO: Is ihis propseg...?
   uint8_t pseg1;
   uint8_t pseg2;
   uint8_t presdiv;
   /// JACOB TODO: Replace with values needed by FDCAN controller
+};
+
+struct fdcan_message_ram
+{
+  /// TODO: style conventions
+  uint32_t StdIdFilterSA;
+  uint32_t ExtIdFilterSA;
+  uint32_t RxFIFO0SA;
+  uint32_t RxFIFO1SA;
+  uint32_t TxFIFOSA;
 };
 
 /* FDCAN device structures */
@@ -301,6 +315,8 @@ struct stm32_driver_s
 #ifdef CONFIG_NET_CAN_CANFD
   struct fdcan_timeseg data_timing; /* Timing for data phase */
 #endif
+
+  struct fdcan_message_ram message_ram;
 
   const struct fdcan_config_s *config;
 
@@ -616,7 +632,7 @@ static int stm32_transmit(FAR struct stm32_driver_s *priv)
 	// Now, we can copy the CAN frame to the queue (in message RAM)
   /// JACOB TODO: Ensure priv->tx points to message RAM TX Queue
   struct mb_s *mb = &priv->tx[mbi];
-	//uint32_t *txbuf  = (uint32_t *)(message_ram_.TxQueueSA + (index * FIFO_ELEMENT_SIZE * WORD_LENGTH));
+	//uint32_t *txbuf  = (uint32_t *)(message_ra_.TxQueueSA + (index * FIFO_ELEMENT_SIZE * WORD_LENGTH));
 
   /* Attempt to write frame */
 
@@ -663,9 +679,9 @@ static int stm32_transmit(FAR struct stm32_driver_s *priv)
     (peak_tx_mailbox_index_ > mbi ? peak_tx_mailbox_index_ : mbi);
 
   union cs_e cs;
-  cs.code = CAN_TXMB_DATAORREMOTE;
+  cs.code = 0xC; // CAN_TXMB_DATAORREMOTE; /// TODO -- #define it
   struct mb_s *mb = &priv->tx[mbi];
-  mb->cs.code = CAN_TXMB_INACTIVE;
+  mb->cs.code = 0x8; // CAN_TXMB_INACTIVE; /// TODO -- #define it
 
   if (priv->dev.d_len == sizeof(struct can_frame))
     {
@@ -1023,6 +1039,7 @@ static void stm32_receive(FAR struct stm32_driver_s *priv)
 static void stm32_txdone(FAR struct stm32_driver_s *priv)
 {
   #warning Missing logic
+  uint32_t flags = 0; /// TODO -- need to finish implementation
 
   /* FIXME First Process Error aborts */
 
@@ -1033,7 +1050,7 @@ static void stm32_txdone(FAR struct stm32_driver_s *priv)
     {
       if (flags & mb_bit)
         {
-          putreg32(mb_bit, priv->base + STM32_CAN_IFLAG1_OFFSET);
+          // putreg32(mb_bit, priv->base + STM32_CAN_IFLAG1_OFFSET); /// TODO -- FIX
           flags &= ~mb_bit;
           NETDEV_TXDONE(&priv->dev);
 #ifdef TX_TIMEOUT_WQ
@@ -1553,7 +1570,7 @@ int stm32_initialize(struct stm32_driver_s *priv)
   /// JACOB: TODO: Relocate...?  Check this is done properly
   struct fdcan_timeseg arbi_timing;
 # ifdef CONFIG_NET_CAN_CANFD
-  #error "CAN FD not yet supported for STM32H7"
+  // #error "CAN FD not yet supported for STM32H7"
   priv->arbi_timing.bitrate = CONFIG_FDCAN1_ARBI_BITRATE;
   priv->arbi_timing.samplep = CONFIG_FDCAN1_ARBI_SAMPLEP;
   priv->data_timing.bitrate = CONFIG_FDCAN1_DATA_BITRATE;
@@ -1563,7 +1580,7 @@ int stm32_initialize(struct stm32_driver_s *priv)
   arbi_timing.samplep = CONFIG_FDCAN1_SAMPLEP;
 # endif
   /// TODO: shoud this be here, or elsewhere?
-  stm32_bitratetotimeseg(&arbi_timing, 1, 0); // default 1-tseg tolerance; non-FD
+  int32_t timings_res = stm32_bitratetotimeseg(&arbi_timing, 1, 0); // default 1-tseg tolerance; non-FD
 
 	if (timings_res < 0) {
 		stm32_setinit(priv->base, 0);
@@ -1578,10 +1595,10 @@ int stm32_initialize(struct stm32_driver_s *priv)
 	 */
 
 	//  We're not using CAN-FD (yet), so set same timings for both
-  regval = ((atbi_timing.sjw << FDCAN_NBTP_NSJW_SHIFT)  |
+  regval = ((arbi_timing.sjw << FDCAN_NBTP_NSJW_SHIFT)  |
 		        (arbi_timing.pseg1 << FDCAN_NBTP_NTSEG1_SHIFT) |
 		        (arbi_timing.pseg2 << FDCAN_NBTP_TSEG2_SHIFT)  |
-		        (arbi_timing.prescaler << FDCAN_NBTP_NBRP_SHIFT),
+		        (arbi_timing.presdiv << FDCAN_NBTP_NBRP_SHIFT));
   putreg32(regval, priv->base + STM32_FDCAN_NBTP_OFFSET);
 	putreg32(regval, priv->base + STM32_FDCAN_DBTP_OFFSET);
 
@@ -1654,7 +1671,7 @@ int stm32_initialize(struct stm32_driver_s *priv)
 
 	// Standard ID Filters: Allow space for 128 filters (128 words)
 	const uint8_t n_stdid = 128;
-	message_ram_.StdIdFilterSA = gl_ram_base + ram_offset * WORD_LENGTH;
+	priv->message_ram.StdIdFilterSA = gl_ram_base + ram_offset * WORD_LENGTH;
 
   regval  = n_stdid << FDCAN_SIDFC_LSS_SHIFT;
 	regval |= ram_offset << FDCAN_SIDFC_FLSSA_SHIFT;
@@ -1663,7 +1680,7 @@ int stm32_initialize(struct stm32_driver_s *priv)
 
 	// Extended ID Filters: Allow space for 128 filters (128 words)
 	const uint8_t n_extid = 128;
-	message_ram_.ExtIdFilterSA = gl_ram_base + ram_offset * WORD_LENGTH;
+	priv->message_ram.ExtIdFilterSA = gl_ram_base + ram_offset * WORD_LENGTH;
   regval = n_extid << FDCAN_XIDFC_LSE_SHIFT;
 	regval |= ram_offset << FDCAN_XIDFC_FLESA_SHIFT;
   putreg32(regval, priv->base + STM32_FDCAN_XIDFC_OFFSET);
@@ -1680,16 +1697,16 @@ int stm32_initialize(struct stm32_driver_s *priv)
 
 	// Set Rx FIFO0 size
   priv->rx = (struct mb_s *)(gl_ram_base + ram_offset * WORD_LENGTH);
-  putreg32(ram_offset << FDCAN_RXF0C_F0SA_SHIFT, priv->base + STM32_FDCAN_RF0C_OFFSET);
+  putreg32(ram_offset << FDCAN_RXF0C_F0SA_SHIFT, priv->base + STM32_FDCAN_RXF0C_OFFSET);
 
   regval = ram_offset << FDCAN_RXF0C_F0SA_SHIFT;
   regval |= n_rxfifo0 << FDCAN_RXF0C_F0S_SHIFT;
-  putreg32(regval, priv->base + STM32_FDCAN_RF0C_OFFSET);
+  putreg32(regval, priv->base + STM32_FDCAN_RXF0C_OFFSET);
 	ram_offset += n_rxfifo0 * FIFO_ELEMENT_SIZE;
 
 	// Set Tx queue size
   priv->tx = (struct mb_s *)(gl_ram_base + ram_offset * WORD_LENGTH);
-  regval = n_txqueue << FDCAN_TXBC_TFQS_SHIFT
+  regval = n_txqueue << FDCAN_TXBC_TFQS_SHIFT;
   regval |= FDCAN_TXBC_TFQM;  // Queue mode (vs. FIFO)
   regval |= ram_offset << FDCAN_TXBC_TBSA_SHIFT;
   putreg32(regval, priv->base + STM32_FDCAN_TXBC_OFFSET);
