@@ -18,7 +18,7 @@
  *
  ****************************************************************************/
 
-/***************************presdiv*************************************************
+/****************************************************************************
  * Included Files
  ****************************************************************************/
 
@@ -99,6 +99,7 @@
 #endif
 
 /* CAN bit timing values  */
+#define STM32_FDCANCLK              STM32_HSE_FREQUENCY
 #define CLK_FREQ                    STM32_FDCANCLK
 #define PRESDIV_MAX                 256
 /// TODO: All of these min/max vals...
@@ -116,6 +117,7 @@
 #define TSEG2_FD_MAX                9
 #define NUMTQ_FD_MAX                49
 
+/* Message RAM */
 #define WORD_LENGTH                 4U
 #define FIFO_ELEMENT_SIZE           4U // size (in Words) of a FIFO element in message RAM
 
@@ -127,9 +129,6 @@
 
 #define TX_TIMEOUT_WQ
 #endif
-
-/* Interrupt flags for RX fifo */
-#define IFLAG1_RXFIFO               (CAN_FIFO_NE | CAN_FIFO_WARN | CAN_FIFO_OV)
 
 static int peak_tx_mailbox_index_ = 0;
 
@@ -221,13 +220,10 @@ struct fdcan_config_s
 struct fdcan_timeseg
 {
   uint32_t bitrate;
-  int32_t samplep;
-  uint8_t propseg;
-  uint8_t sjw; /// TODO: Is ihis propseg...?
-  uint8_t pseg1;
-  uint8_t pseg2;
-  uint8_t presdiv;
-  /// JACOB TODO: Replace with values needed by FDCAN controller
+  uint8_t sjw;
+  uint8_t bs1;
+  uint8_t bs2;
+  uint8_t prescaler;
 };
 
 struct fdcan_message_ram
@@ -376,12 +372,10 @@ static inline uint32_t arm_lsb(unsigned int value)
  * Name: stm32_bitratetotimeseg
  *
  * Description:
- *   Convert bitrate to timeseg
+ *   Convert bitrate to timeseg values
  *
  * Input Parameters:
  *   timeseg - structure to store bit timing
- *   sp_tolerance - allowed difference in sample point from calculated
- *                  bit timings (recommended value: 1)
  *   can_fd - if set to calculate CAN FD bit timings, otherwise calculate
  *            classical can timings
  *
@@ -389,102 +383,116 @@ static inline uint32_t arm_lsb(unsigned int value)
  *   return 1 on succes, return 0 on failure
  *
  ****************************************************************************/
-/// JACOB TODO: Replace with STM32 FDCAN-compatible bit timing calculator
-uint32_t stm32_bitratetotimeseg(struct fdcan_timeseg *timeseg,
-                                                int32_t sp_tolerance,
-                                                uint32_t can_fd)
+
+uint32_t stm32_bitratetotimeseg(struct fdcan_timeseg *timeseg, uint32_t can_fd)
 {
-  int32_t tmppresdiv;
-  int32_t numtq;
-  int32_t tmpsample;
-  int32_t tseg1;
-  int32_t tseg2;
-  int32_t tmppseg1;
-  int32_t tmppseg2;
-  int32_t tmppropseg;
+  /// TODO: Verify this works for data phase of CAN-FD as well
+  /* 
+   * Implementation ported from PX4's uavcan_drivers/stm32[h7]
+   * 
+	 * Ref. "Automatic Baudrate Detection in CANopen Networks", U. Koppe, MicroControl GmbH & Co. KG
+	 *      CAN in Automation, 2003
+	 *
+	 * According to the source, optimal quanta per bit are:
+	 *   Bitrate        Optimal Maximum
+	 *   1000 kbps      8       10
+	 *   500  kbps      16      17
+	 *   250  kbps      16      17
+	 *   125  kbps      16      17
+	 */
+  const uint32_t target_bitrate = timeseg->bitrate;  
+	static const int32_t MaxBS1 = 16;
+	static const int32_t MaxBS2 = 8;
+	const uint8_t max_quanta_per_bit = (timeseg->bitrate >= 1000000) ? 10 : 17;
+	static const int MaxSamplePointLocation = 900;
 
-  const int32_t TSEG1MAX = (can_fd ? TSEG1_FD_MAX : TSEG1_MAX);
-  const int32_t TSEG2MAX = (can_fd ? TSEG2_FD_MAX : TSEG2_MAX);
-  const int32_t SEGMAX = (can_fd ? SEG_FD_MAX : SEG_MAX);
-  const int32_t NUMTQMAX = (can_fd ? NUMTQ_FD_MAX : NUMTQMAX);
+	/*
+	 * Computing (prescaler * BS):
+	 *   BITRATE = 1 / (PRESCALER * (1 / PCLK) * (1 + BS1 + BS2))       -- See the Reference Manual
+	 *   BITRATE = PCLK / (PRESCALER * (1 + BS1 + BS2))                 -- Simplified
+	 * let:
+	 *   BS = 1 + BS1 + BS2                                             -- Number of time quanta per bit
+	 *   PRESCALER_BS = PRESCALER * BS
+	 * ==>
+	 *   PRESCALER_BS = PCLK / BITRATE
+	 */
+	const uint32_t prescaler_bs = CLK_FREQ / target_bitrate;
 
-  for (tmppresdiv = 0; tmppresdiv < PRESDIV_MAX; tmppresdiv++)
+	/*
+	 * Searching for such prescaler value so that the number of quanta per bit is highest.
+	 */
+	uint8_t bs1_bs2_sum = max_quanta_per_bit - 1;
+
+	while ((prescaler_bs % (1 + bs1_bs2_sum)) != 0)
     {
-      numtq = (CLK_FREQ / ((tmppresdiv + 1) * timeseg->bitrate));
-
-      if (numtq == 0)
+		  if (bs1_bs2_sum <= 2)
         {
-          continue;
-        }
+			    return 0; // No solution
+		    }
 
-      /* The number of time quanta in 1 bit time must be lower than the one supported */
+		  bs1_bs2_sum--;
+	  }
 
-      if ((CLK_FREQ / ((tmppresdiv + 1) * numtq) == timeseg->bitrate)
-          && (numtq >= 8) && (numtq < NUMTQMAX))
-        {
-          /* Compute time segments based on the value of the sampling point */
+	const uint32_t prescaler = prescaler_bs / (1 + bs1_bs2_sum);
 
-          tseg1 = (numtq * timeseg->samplep / 100) - 1;
-          tseg2 = numtq - 1 - tseg1;
+	if ((prescaler < 1U) || (prescaler > 1024U))
+    {
+		  return 0; // No solution
+	  }
 
-          /* Adjust time segment 1 and time segment 2 */
+	/*
+	 * Now we have a constraint: (BS1 + BS2) == bs1_bs2_sum.
+	 * We need to find the values so that the sample point is as close as possible to the optimal value.
+	 *
+	 *   Solve[(1 + bs1)/(1 + bs1 + bs2) == 7/8, bs2]  (* Where 7/8 is 0.875, the recommended sample point location *)
+	 *   {{bs2 -> (1 + bs1)/7}}
+	 *
+	 * Hence:
+	 *   bs2 = (1 + bs1) / 7
+	 *   bs1 = (7 * bs1_bs2_sum - 1) / 8
+	 *
+	 * Sample point location can be computed as follows:
+	 *   Sample point location = (1 + bs1) / (1 + bs1 + bs2)
+	 *
+	 * Since the optimal solution is so close to the maximum, we prepare two solutions, and then pick the best one:
+	 *   - With rounding to nearest
+	 *   - With rounding to zero
+	 */
 
-          while (tseg1 >= TSEG1MAX || tseg2 < TSEG_MIN)
-            {
-              tseg2++;
-              tseg1--;
-            }
+	// First attempt with rounding to nearest
+  uint8_t bs1 = (uint8_t)((7 * bs1_bs2_sum - 1) + 4) / 8;
+  uint8_t bs2 = (uint8_t)(bs1_bs2_sum - bs1);
+  uint16_t sample_point_permill = (uint16_t)(1000 * (1 + bs1) / (1 + bs1 + bs2));
+  
+	if (sample_point_permill > MaxSamplePointLocation)
+    {
+		  // Second attempt with rounding to zero
+		  bs1 = (7 * bs1_bs2_sum - 1) / 8;
+      bs2 = bs1_bs2_sum - bs1;
+	  }
 
-          tmppseg2 = tseg2 - 1;
+  bool valid = (bs1 >= 1) && (bs1 <= MaxBS1) && (bs2 >= 1) && (bs2 <= MaxBS2);
 
-          /* Start from pseg1 = pseg2 and adjust until propseg is valid */
+	/*
+	 * Final validation
+	 * Helpful Python:
+	 * def sample_point_from_btr(x):
+	 *     assert 0b0011110010000000111111000000000 & x == 0
+	 *     ts2,ts1,brp = (x>>20)&7, (x>>16)&15, x&511
+	 *     return (1+ts1+1)/(1+ts1+1+ts2+1)
+	 *
+	 */
+	if ((target_bitrate != (CLK_FREQ / (prescaler * (1 + bs1 + bs2)))) || !valid)
+    {
+		  return 0; // Solution not found
+	  }
 
-          tmppseg1 = tmppseg2;
-          tmppropseg = tseg1 - tmppseg1 - 2;
+  timeseg->bs1 = (uint8_t)(bs1 - 1);
+  timeseg->bs2 = (uint8_t)(bs2 - 1);
+  timeseg->prescaler = (uint16_t)(prescaler - 1);
+  timeseg->sjw = 0; // Which means one
 
-          while (tmppropseg <= 0)
-            {
-              tmppropseg++;
-              tmppseg1--;
-            }
-
-          while (tmppropseg >= SEGMAX)
-            {
-              tmppropseg--;
-              tmppseg1++;
-            }
-
-          if (((tseg1 >= TSEG1MAX) || (tseg2 >= TSEG2MAX) ||
-              (tseg2 < TSEG_MIN) || (tseg1 < TSEG_MIN)) ||
-              ((tmppropseg >= SEGMAX) || (tmppseg1 >= SEGMAX) ||
-                  (tmppseg2 < SEG_MIN) || (tmppseg2 >= SEGMAX)))
-            {
-              continue;
-            }
-
-          tmpsample = ((tseg1 + 1) * 100) / numtq;
-
-          if ((tmpsample - timeseg->samplep) <= sp_tolerance &&
-              (timeseg->samplep - tmpsample) <= sp_tolerance)
-            {
-              if (can_fd == 1)
-                {
-                  timeseg->propseg = tmppropseg + 1;
-                }
-              else
-                {
-                  timeseg->propseg = tmppropseg;
-                }
-              timeseg->pseg1 = tmppseg1;
-              timeseg->pseg2 = tmppseg2;
-              timeseg->presdiv = tmppresdiv;
-              timeseg->samplep = tmpsample;
-              return 1;
-            }
-        }
-    }
-
-  return 0;
+  return 1;
 }
 
 /* Common TX logic */
@@ -680,7 +688,7 @@ static int stm32_transmit(FAR struct stm32_driver_s *priv)
 
   union cs_e cs;
   cs.code = 0xC; // CAN_TXMB_DATAORREMOTE; /// TODO -- #define it
-  struct mb_s *mb = &priv->tx[mbi];
+  /*struct mb_s * */mb = &priv->tx[mbi];
   mb->cs.code = 0x8; // CAN_TXMB_INACTIVE; /// TODO -- #define it
 
   if (priv->dev.d_len == sizeof(struct can_frame))
@@ -865,11 +873,11 @@ static void stm32_receive(FAR struct stm32_driver_s *priv)
   putreg32(regval, priv->base + STM32_FDCAN_IR_OFFSET);
 
 	// Bitwise register definitions are the same for FIFO 0/1
-	const uint32_t FDCAN_RXFnC_FnS      = FDCAN_RXF0C_F0S;  // Rx FIFO Size
-	const uint32_t FDCAN_RXFnS_RFnL     = FDCAN_RXF0S_RF0L; // Rx Message Lost
-	const uint32_t FDCAN_RXFnS_FnFL     = FDCAN_RXF0S_F0FL; // Rx FIFO Fill Level
-	const uint32_t FDCAN_RXFnS_FnGI     = FDCAN_RXF0S_F0GI; // Rx FIFO Get Index
-	const uint32_t FDCAN_RXFnS_FnGI_Pos = FDCAN_RXF0S_F0GI_Pos;
+	const uint32_t FDCAN_RXFnC_FnS        = FDCAN_RXF0C_F0S;  // Rx FIFO Size
+	const uint32_t FDCAN_RXFnS_RFnL       = FDCAN_RXF0S_RF0L; // Rx Message Lost
+	const uint32_t FDCAN_RXFnS_FnFL       = FDCAN_RXF0S_F0FL; // Rx FIFO Fill Level
+	const uint32_t FDCAN_RXFnS_FnGI       = FDCAN_RXF0S_F0GI; // Rx FIFO Get Index
+	const uint32_t FDCAN_RXFnS_FnGI_SHIFT = FDCAN_RXF0S_F0GI_SHIFT;
 	//const uint32_t FDCAN_RXFnS_FnPI     = FDCAN_RXF0S_F0PI; // Rx FIFO Put Index
 	//const uint32_t FDCAN_RXFnS_FnPI_Pos = FDCAN_RXF0S_F0PI_Pos;
 	//const uint32_t FDCAN_RXFnS_FnF      = FDCAN_RXF0S_F0F; // Rx FIFO Full
@@ -909,7 +917,7 @@ static void stm32_receive(FAR struct stm32_driver_s *priv)
     {
       // Copy the frame from message RAM
 
-      const uint8_t index = (*RXFnS & FDCAN_RXFnS_FnGI) >> FDCAN_RXFnS_FnGI_Pos;
+      const uint8_t index = (*RXFnS & FDCAN_RXFnS_FnGI) >> FDCAN_RXFnS_FnGI_SHIFT;
 
       rf = &priv->rx[index];
 
@@ -1458,13 +1466,10 @@ static int stm32_ioctl(struct net_driver_s *dev, int cmd,
           struct can_ioctl_data_s *req =
               (struct can_ioctl_data_s *)((uintptr_t)arg);
           req->arbi_bitrate = priv->arbi_timing.bitrate / 1000; /* kbit/s */
-          req->arbi_samplep = priv->arbi_timing.samplep;
 #ifdef CONFIG_NET_CAN_CANFD
           req->data_bitrate = priv->data_timing.bitrate / 1000; /* kbit/s */
-          req->data_samplep = priv->data_timing.samplep;
 #else
           req->data_bitrate = 0;
-          req->data_samplep = 0;
 #endif
           ret = OK;
         }
@@ -1477,9 +1482,8 @@ static int stm32_ioctl(struct net_driver_s *dev, int cmd,
 
           struct fdcan_timeseg arbi_timing;
           arbi_timing.bitrate = req->arbi_bitrate * 1000;
-          arbi_timing.samplep = req->arbi_samplep;
 
-          if (stm32_bitratetotimeseg(&arbi_timing, 10, 0))
+          if (stm32_bitratetotimeseg(&arbi_timing, 0))
             {
               ret = OK;
             }
@@ -1491,9 +1495,8 @@ static int stm32_ioctl(struct net_driver_s *dev, int cmd,
 #ifdef CONFIG_NET_CAN_CANFD
           struct fdcan_timeseg data_timing;
           data_timing.bitrate = req->data_bitrate * 1000;
-          data_timing.samplep = req->data_samplep;
 
-          if (ret == OK && stm32_bitratetotimeseg(&data_timing, 10, 1))
+          if (ret == OK && stm32_bitratetotimeseg(&data_timing, 1))
             {
               ret = OK;
             }
@@ -1572,15 +1575,12 @@ int stm32_initialize(struct stm32_driver_s *priv)
 # ifdef CONFIG_NET_CAN_CANFD
   // #error "CAN FD not yet supported for STM32H7"
   priv->arbi_timing.bitrate = CONFIG_FDCAN1_ARBI_BITRATE;
-  priv->arbi_timing.samplep = CONFIG_FDCAN1_ARBI_SAMPLEP;
   priv->data_timing.bitrate = CONFIG_FDCAN1_DATA_BITRATE;
-  priv->data_timing.samplep = CONFIG_FDCAN1_DATA_SAMPLEP;
 # else
   arbi_timing.bitrate = CONFIG_FDCAN1_BITRATE;
-  arbi_timing.samplep = CONFIG_FDCAN1_SAMPLEP;
 # endif
   /// TODO: shoud this be here, or elsewhere?
-  int32_t timings_res = stm32_bitratetotimeseg(&arbi_timing, 1, 0); // default 1-tseg tolerance; non-FD
+  int32_t timings_res = stm32_bitratetotimeseg(&arbi_timing, 0); // default 1-tseg tolerance; non-FD
 
 	if (timings_res < 0) {
 		stm32_setinit(priv->base, 0);
@@ -1596,9 +1596,9 @@ int stm32_initialize(struct stm32_driver_s *priv)
 
 	//  We're not using CAN-FD (yet), so set same timings for both
   regval = ((arbi_timing.sjw << FDCAN_NBTP_NSJW_SHIFT)  |
-		        (arbi_timing.pseg1 << FDCAN_NBTP_NTSEG1_SHIFT) |
-		        (arbi_timing.pseg2 << FDCAN_NBTP_TSEG2_SHIFT)  |
-		        (arbi_timing.presdiv << FDCAN_NBTP_NBRP_SHIFT));
+		        (arbi_timing.bs1 << FDCAN_NBTP_NTSEG1_SHIFT) |
+		        (arbi_timing.bs2 << FDCAN_NBTP_TSEG2_SHIFT)  |
+		        (arbi_timing.prescaler << FDCAN_NBTP_NBRP_SHIFT));
   putreg32(regval, priv->base + STM32_FDCAN_NBTP_OFFSET);
 	putreg32(regval, priv->base + STM32_FDCAN_DBTP_OFFSET);
 
@@ -1816,12 +1816,9 @@ int stm32_netinitialize(int intf)
 
 #  ifdef CONFIG_NET_CAN_CANFD
       priv->arbi_timing.bitrate = CONFIG_FDCAN1_ARBI_BITRATE;
-      priv->arbi_timing.samplep = CONFIG_FDCAN1_ARBI_SAMPLEP;
       priv->data_timing.bitrate = CONFIG_FDCAN1_DATA_BITRATE;
-      priv->data_timing.samplep = CONFIG_FDCAN1_DATA_SAMPLEP;
 #  else
       priv->arbi_timing.bitrate = CONFIG_FDCAN1_BITRATE;
-      priv->arbi_timing.samplep = CONFIG_FDCAN1_SAMPLEP;
 #  endif
       break;
 #endif
@@ -1838,12 +1835,9 @@ int stm32_netinitialize(int intf)
 
 #  ifdef CONFIG_NET_CAN_CANFD
       priv->arbi_timing.bitrate = CONFIG_FDCAN2_ARBI_BITRATE;
-      priv->arbi_timing.samplep = CONFIG_FDCAN2_ARBI_SAMPLEP;
       priv->data_timing.bitrate = CONFIG_FDCAN2_DATA_BITRATE;
-      priv->data_timing.samplep = CONFIG_FDCAN2_DATA_SAMPLEP;
 #  else
       priv->arbi_timing.bitrate = CONFIG_FDCAN2_BITRATE;
-      priv->arbi_timing.samplep = CONFIG_FDCAN2_SAMPLEP;
 #  endif
       break;
 #endif
@@ -1852,7 +1846,7 @@ int stm32_netinitialize(int intf)
       return -ENODEV;
     }
 
-  if (!stm32_bitratetotimeseg(&priv->arbi_timing, 1, 0))
+  if (!stm32_bitratetotimeseg(&priv->arbi_timing, 0))
     {
       nerr("ERROR: Invalid CAN timings: please try another sample point "
            "or refer to the reference manual\n");
@@ -1860,7 +1854,7 @@ int stm32_netinitialize(int intf)
     }
 
 #ifdef CONFIG_NET_CAN_CANFD
-  if (!stm32_bitratetotimeseg(&priv->data_timing, 1, 1))
+  if (!stm32_bitratetotimeseg(&priv->data_timing, 1))
     {
       nerr("ERROR: Invalid CAN data phase timings: please try another "
            "sample point or refer to the reference manual\n");

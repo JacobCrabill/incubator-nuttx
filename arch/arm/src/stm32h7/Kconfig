@@ -5341,30 +5341,15 @@ config FDCAN1_BITRATE
 	depends on !NET_CAN_CANFD
 	default 1000000
 
-config FDCAN1_SAMPLEP
-	int "CAN sample point"
-	depends on !NET_CAN_CANFD
-	default 80
-
 config FDCAN1_ARBI_BITRATE
 	int "CAN FD Arbitration phase bitrate"
 	depends on NET_CAN_CANFD
 	default 1000000
 
-config FDCAN1_ARBI_SAMPLEP
-	int "CAN FD Arbitration phase sample point"
-	depends on NET_CAN_CANFD
-	default 80
-
 config FDCAN1_DATA_BITRATE
 	int "CAN FD Data phase bitrate"
 	depends on NET_CAN_CANFD
 	default 4000000
-
-config FDCAN1_DATA_SAMPLEP
-	int "CAN FD Data phase sample point"
-	depends on NET_CAN_CANFD
-	default 90
 
 endmenu # STM32H7_FDCAN1
 
@@ -5376,30 +5361,15 @@ config FDCAN2_BITRATE
 	depends on !NET_CAN_CANFD
 	default 1000000
 
-config FDCAN2_SAMPLEP
-	int "CAN sample point"
-	depends on !NET_CAN_CANFD
-	default 80
-
 config FDCAN2_ARBI_BITRATE
 	int "CAN FD Arbitration phase bitrate"
 	depends on NET_CAN_CANFD
 	default 1000000
 
-config FDCAN2_ARBI_SAMPLEP
-	int "CAN FD Arbitration phase sample point"
-	depends on NET_CAN_CANFD
-	default 80
-
 config FDCAN2_DATA_BITRATE
 	int "CAN FD Data phase bitrate"
 	depends on NET_CAN_CANFD
 	default 4000000
-
-config FDCAN2_DATA_SAMPLEP
-	int "CAN FD Data phase sample point"
-	depends on NET_CAN_CANFD
-	default 90
 
 endmenu # STM32H7_FDCAN2
 
