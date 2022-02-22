@@ -228,12 +228,14 @@ struct fdcan_timeseg
 
 struct fdcan_message_ram
 {
-  /// TODO: style conventions
-  uint32_t StdIdFilterSA;
-  uint32_t ExtIdFilterSA;
-  uint32_t RxFIFO0SA;
-  uint32_t RxFIFO1SA;
-  uint32_t TxFIFOSA;
+  uint32_t filt_stdid_address;
+  uint32_t filt_extid_address;
+  uint32_t rxfifo0_address;
+  uint32_t rxfifo1_address;
+  uint32_t txqueue_address;
+  uint8_t n_rxfifo0;
+  uint8_t n_rxfifo1;
+  uint8_t n_txqueue;
 };
 
 /* FDCAN device structures */
@@ -505,7 +507,6 @@ static int  stm32_txpoll(struct net_driver_s *dev);
 
 static void stm32_setinit(uint32_t base, uint32_t init);
 static void stm32_setenable(uint32_t base, uint32_t enable);
-static void stm32_setfreeze(uint32_t base, uint32_t freeze);
 static uint32_t stm32_waitccr_change(uint32_t base,
                                        uint32_t mask,
                                        uint32_t target_state);
@@ -1540,8 +1541,6 @@ int stm32_initialize(struct stm32_driver_s *priv)
 {
   uint32_t regval;
   
-  /// NOTE: modifyreg32(addr, clearbits, setbits)
-	
   /*
 	 * Wake up the device and enable configuration changes
 	 */
@@ -1663,17 +1662,17 @@ int stm32_initialize(struct stm32_driver_s *priv)
 
 	// Standard ID Filters: Allow space for 128 filters (128 words)
 	const uint8_t n_stdid = 128;
-	priv->message_ram.StdIdFilterSA = gl_ram_base + ram_offset * WORD_LENGTH;
+	priv->message_ram.filt_stdid_address = gl_ram_base + ram_offset * WORD_LENGTH;
 
-  regval  = n_stdid << FDCAN_SIDFC_LSS_SHIFT;
+  regval  = (n_stdid << FDCAN_SIDFC_LSS_SHIFT) & FDCAN_SIDFC_LSS_MASK;
 	regval |= ram_offset << FDCAN_SIDFC_FLSSA_SHIFT;
   putreg32(regval, priv->base + STM32_FDCAN_SIDFC_OFFSET);
 	ram_offset += n_stdid;
 
 	// Extended ID Filters: Allow space for 128 filters (128 words)
 	const uint8_t n_extid = 128;
-	priv->message_ram.ExtIdFilterSA = gl_ram_base + ram_offset * WORD_LENGTH;
-  regval = n_extid << FDCAN_XIDFC_LSE_SHIFT;
+	priv->message_ram.filt_extid_address = gl_ram_base + ram_offset * WORD_LENGTH;
+  regval = (n_extid << FDCAN_XIDFC_LSE_SHIFT) & FDCAN_XIDFC_LSE_MASK;
 	regval |= ram_offset << FDCAN_XIDFC_FLESA_SHIFT;
   putreg32(regval, priv->base + STM32_FDCAN_XIDFC_OFFSET);
 	ram_offset += n_extid;
@@ -1682,23 +1681,29 @@ int stm32_initialize(struct stm32_driver_s *priv)
   putreg32(0, priv->base + STM32_FDCAN_RXESC_OFFSET);  // 8 byte space for every element (Rx buffer, FIFO1, FIFO0)
   putreg32(0, priv->base + STM32_FDCAN_TXESC_OFFSET);  // 8 byte space for every element (Tx buffer)
 
-  /// JACOB: TODO: Correct place for setting the tx, rx pointers?
   /// JACOB: TODO: Figure out how to setup all this for CAN FD frames
 	const uint8_t n_rxfifo0 = 64;  // 64 elements max for RX FIFO0
+  const uint8_t n_rxfifo1 = 0;  // No elements for RX FIFO1
   const uint8_t n_txqueue = 32;  // 32 elements max for TX queue
 
+  priv->message_ram.n_rxfifo0 = n_rxfifo0;
+  priv->message_ram.n_rxfifo1 = 0;
+  priv->message_ram.n_txqueue = n_txqueue;
+
 	// Set Rx FIFO0 size
+  priv->message_ram.rxfifo0_address = gl_ram_base + ram_offset * WORD_LENGTH;
   priv->rx = (struct mb_s *)(gl_ram_base + ram_offset * WORD_LENGTH);
   putreg32(ram_offset << FDCAN_RXF0C_F0SA_SHIFT, priv->base + STM32_FDCAN_RXF0C_OFFSET);
 
   regval = ram_offset << FDCAN_RXF0C_F0SA_SHIFT;
-  regval |= n_rxfifo0 << FDCAN_RXF0C_F0S_SHIFT;
+  regval |= (n_rxfifo0 << FDCAN_RXF0C_F0S_SHIFT) & FDCAN_RXF0C_F0S_MASK;
   putreg32(regval, priv->base + STM32_FDCAN_RXF0C_OFFSET);
 	ram_offset += n_rxfifo0 * FIFO_ELEMENT_SIZE;
 
 	// Set Tx queue size
+  priv->message_ram. txqueue_address= gl_ram_base + ram_offset * WORD_LENGTH;
   priv->tx = (struct mb_s *)(gl_ram_base + ram_offset * WORD_LENGTH);
-  regval = n_txqueue << FDCAN_TXBC_TFQS_SHIFT;
+  regval = (n_txqueue << FDCAN_TXBC_TFQS_SHIFT) & FDCAN_TXBC_TFQS_MASK;
   regval |= FDCAN_TXBC_TFQM;  // Queue mode (vs. FIFO)
   regval |= ram_offset << FDCAN_TXBC_TBSA_SHIFT;
   putreg32(regval, priv->base + STM32_FDCAN_TXBC_OFFSET);
@@ -1748,6 +1753,30 @@ static void stm32_reset(struct stm32_driver_s *priv)
   /// clear all  pending transfers and watchdogs
   /// This _shouldn't_ require touching the message RAM
 
+  /* Request Init Mode */
+
+  stm32_setenable(priv->base, 1);
+  stm32_setinit(priv->base, 1);
+  
+  /* Enable Configuration Change Mode */
+
+  stm32_setconfig(priv->base, 1);
+
+	/* Disable Interrupts */
+
+	// Clear all interrupt flags
+	// Note: A flag is cleared by writing a 1 to the corresponding bit position
+  putreg32(0xFFFFFFFF, priv->base + STM32_FDCAN_IR_OFFSET);
+
+	// Disable all RX interrupts
+  putreg32(0, priv->base + STM32_FDCAN_IE_OFFSET);
+
+	// Disable Tx buffer transmission interrupt
+  putreg32(0, priv->base + STM32_FDCAN_TXBTIE_OFFSET);
+
+	// Disable both interrupt lines
+  putreg32(0, priv->base + STM32_FDCAN_ILE_OFFSET);
+
 
   /* Reset all MB rx and tx */
 
@@ -1774,10 +1803,10 @@ static void stm32_reset(struct stm32_driver_s *priv)
  ****************************************************************************/
 
 /****************************************************************************
- * Function: stm32_netinitialize
+ * Function: stm32_caninitialize
  *
  * Description:
- *   Initialize the network controller and driver
+ *   Initialize the CAN controller and driver
  *
  * Input Parameters:
  *   intf - In the case where there are multiple transceivers, this value
@@ -1790,10 +1819,9 @@ static void stm32_reset(struct stm32_driver_s *priv)
  *
  ****************************************************************************/
 
-int stm32_netinitialize(int intf)
+int stm32_caninitialize(int intf)
 {
   struct stm32_driver_s *priv;
-  int ret;
 
   switch (intf)
     {
@@ -1892,18 +1920,11 @@ int stm32_netinitialize(int intf)
 #endif
   priv->dev.d_private = (void *)priv;      /* Used to recover private state from dev */
 
-  /// JACOB TODO: I set these later when I configure the message RAM for the interface.
-  ///             Is that okay?
-  /// UPDATE: 'stm32_ifdown()' calls 'stm32_reset()', which clears rx and tx.  Need
-  ///         them to not be null by then.
-  priv->rx = NULL;
-  priv->tx = NULL;
+  ninfo("callbacks done; initializing device\r\n");
 
-  /* Put the interface in the down state.  This usually amounts to resetting
-   * the device and/or calling stm32_ifdown().
-   */
+  stm32_initialize(&priv->dev);
 
-  ninfo("callbacks done\r\n");
+  /* Put the interface in the down state (disable interrupts, enter sleep mode) */
 
   stm32_ifdown(&priv->dev);
 
@@ -1911,7 +1932,6 @@ int stm32_netinitialize(int intf)
 
   netdev_register(&priv->dev, NET_LL_CAN);
 
-  UNUSED(ret);
   return OK;
 }
 
@@ -1930,11 +1950,11 @@ int stm32_netinitialize(int intf)
 void up_netinitialize(void)
 {
 #ifdef CONFIG_STM32H7_FDCAN1
-  stm32_netinitialize(0);
+  stm32_caninitialize(0);
 #endif
 
 #ifdef CONFIG_STM32H7_FDCAN2
-  stm32_netinitialize(1);
+  stm32_caninitialize(1);
 #endif
 }
 #endif
