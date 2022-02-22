@@ -288,7 +288,7 @@ struct stm32_driver_s
   uint8_t iface_idx;            /* FDCAN interface index (0 or 1) */
   bool bifup;                   /* true:ifup false:ifdown */
 #ifdef TX_TIMEOUT_WQ
-  WDOG_ID txtimeout[TXMBCOUNT]; /* TX timeout timer */
+  wdog_s txtimeout[TXMBCOUNT]; /* TX timeout timer */
 #endif
   struct work_s irqwork;        /* For deferring interrupt work to the wq */
   struct work_s pollwork;       /* For deferring poll work to the work wq */
@@ -755,7 +755,7 @@ static int stm32_transmit(FAR struct stm32_driver_s *priv)
 
   if (timeout > 0)
     {
-      wd_start(priv->txtimeout[mbi], timeout + 1, stm32_txtimeout_expiry,
+      wd_start(&priv->txtimeout[mbi], timeout + 1, stm32_txtimeout_expiry,
                 1, (wdparm_t)priv);
     }
 #endif
@@ -878,9 +878,6 @@ static void stm32_receive(FAR struct stm32_driver_s *priv)
 	const uint32_t FDCAN_RXFnS_FnFL       = FDCAN_RXF0S_F0FL; // Rx FIFO Fill Level
 	const uint32_t FDCAN_RXFnS_FnGI       = FDCAN_RXF0S_F0GI; // Rx FIFO Get Index
 	const uint32_t FDCAN_RXFnS_FnGI_SHIFT = FDCAN_RXF0S_F0GI_SHIFT;
-	//const uint32_t FDCAN_RXFnS_FnPI     = FDCAN_RXF0S_F0PI; // Rx FIFO Put Index
-	//const uint32_t FDCAN_RXFnS_FnPI_Pos = FDCAN_RXF0S_F0PI_Pos;
-	//const uint32_t FDCAN_RXFnS_FnF      = FDCAN_RXF0S_F0F; // Rx FIFO Full
 
   uint32_t offset_rxfnc = (fifo_id == 0) ? STM32_FDCAN_RXF0C_OFFSET : STM32_FDCAN_RXF1C_OFFSET;
   uint32_t offset_rxfns = (fifo_id == 0) ? STM32_FDCAN_RXF0S_OFFSET : STM32_FDCAN_RXF1S_OFFSET;
@@ -890,8 +887,6 @@ static void stm32_receive(FAR struct stm32_driver_s *priv)
 	volatile uint32_t *const RXFnS = priv->base + offset_rxfns;
 	volatile uint32_t *const RXFnA = priv->base + offset_rxfna;
 
-	bool had_error = false;
-
 	// Check number of elements in message RAM allocated to this FIFO
 	if ((*RXFnC & FDCAN_RXFnC_FnS) == 0) {
 		nerr("ERROR: No RX FIFO elements allocated");
@@ -900,8 +895,7 @@ static void stm32_receive(FAR struct stm32_driver_s *priv)
 
 	// Check for message lost; count an error
 	if ((*RXFnS & FDCAN_RXFnS_RFnL) != 0) {
-    /// JACOB: TODO: does NuttX store this kind of frame-drop count somewhere?
-		// error_cnt_++;  
+    NETDEV_RXERRORS(&priv->dev);
 	}
 
 	// Check number of elements available (fill level)
@@ -926,7 +920,7 @@ static void stm32_receive(FAR struct stm32_driver_s *priv)
 #ifdef CONFIG_NET_CAN_CANFD
       if (rf->cs.edl) /* CAN FD frame */
         {
-        struct canfd_frame *frame = (struct canfd_frame *)priv->rxdesc;
+          struct canfd_frame *frame = (struct canfd_frame *)priv->rxdesc;
 
           if (rf->cs.ide)
             {
@@ -956,9 +950,9 @@ static void stm32_receive(FAR struct stm32_driver_s *priv)
 
           *RXFnA = index;
 
-          /* Copy the buffer pointer to priv->dev..  Set amount of data
-          * in priv->dev.d_len
-          */
+          /* Copy the buffer pointer to priv->dev
+           * Set amount of data in priv->dev.d_len
+           */
 
           priv->dev.d_len = sizeof(struct canfd_frame);
           priv->dev.d_buf = (uint8_t *)frame;
@@ -966,7 +960,7 @@ static void stm32_receive(FAR struct stm32_driver_s *priv)
       else /* CAN 2.0 Frame */
 #endif
         {
-        struct can_frame *frame = (struct can_frame *)priv->rxdesc;
+          struct can_frame *frame = (struct can_frame *)priv->rxdesc;
 
           if (rf->cs.ide)
             {
@@ -993,9 +987,9 @@ static void stm32_receive(FAR struct stm32_driver_s *priv)
 
           *RXFnA = index;
 
-          /* Copy the buffer pointer to priv->dev..  Set amount of data
-          * in priv->dev.d_len
-          */
+          /* Copy the buffer pointer to priv->dev
+           * Set amount of data in priv->dev.d_len
+           */
 
           priv->dev.d_len = sizeof(struct can_frame);
           priv->dev.d_buf = (uint8_t *)frame;
@@ -1008,18 +1002,14 @@ static void stm32_receive(FAR struct stm32_driver_s *priv)
       can_input(&priv->dev);
 
       /* Point the packet buffer back to the next Tx buffer that will be
-      * used during the next write.  If the write queue is full, then
-      * this will point at an active buffer, which must not be written
-      * to.  This is OK because devif_poll won't be called unless the
-      * queue is not full.
-      */
+       * used during the next write.  If the write queue is full, then
+       * this will point at an active buffer, which must not be written
+       * to.  This is OK because devif_poll won't be called unless the
+       * queue is not full.
+       */
 
       priv->dev.d_buf = (uint8_t *)priv->txdesc;
     }
-
-	// if (had_error) {
-	// 	error_cnt_++;
-	// }
 
 	// update_event_.signalFromInterrupt();
 
@@ -1066,7 +1056,7 @@ static void stm32_txdone(FAR struct stm32_driver_s *priv)
            * corresponding watchdog can be canceled.
            */
 
-          wd_cancel(priv->txtimeout[mbi]);
+          wd_cancel(&priv->txtimeout[mbi]);
 #endif
         }
 
@@ -1101,7 +1091,7 @@ static void stm32_txdone(FAR struct stm32_driver_s *priv)
  ****************************************************************************/
 
 static int stm32_fdcan_interrupt(int irq, FAR void *context,
-                                     FAR void *arg)
+                                 FAR void *arg)
 {
   FAR struct stm32_driver_s *priv = (struct stm32_driver_s *)arg;
 
@@ -1343,6 +1333,8 @@ static int stm32_ifdown(struct net_driver_s *dev)
 {
   FAR struct stm32_driver_s *priv =
     (FAR struct stm32_driver_s *)dev->d_private;
+
+  /// TODO: disable all interrupts, clear mailboxes
 
   stm32_reset(priv);
 
@@ -1733,7 +1725,7 @@ int stm32_initialize(struct stm32_driver_s *priv)
  * Function: stm32_reset
  *
  * Description:
- *   Put the EMAC in the non-operational, reset state
+ *   Put the device in the non-operational, reset state
  *
  * Input Parameters:
  *   priv - Reference to the private FDCAN driver state structure
@@ -1752,21 +1744,22 @@ static void stm32_reset(struct stm32_driver_s *priv)
 
   /// JACOB: TODO: put hardware into reset / sleep mode
 
-  /// JACOB: TODO: Configure all Rx / Tx message RAM here?
-  /// NOTE: in NXP FlexCAN they call this from _initialize() after setting 
-  /// clock src and enabling the hardware
+  /// This function should disable all interrupts, clear IR flags, and
+  /// clear all  pending transfers and watchdogs
+  /// This _shouldn't_ require touching the message RAM
 
-  /* Initialize all MB rx and tx */
 
-  for (i = 0; i < TOTALMBCOUNT; i++)
-    {
-      ninfo("MB %i %p\r\n", i, &priv->rx[i]);
-      ninfo("MB %i %p\r\n", i, &priv->rx[i].id.w);
-      priv->rx[i].cs.cs = 0x0;
-      priv->rx[i].id.w = 0x0;
-      priv->rx[i].data[0].w00 = 0x0;
-      priv->rx[i].data[1].w00 = 0x0;
-    }
+  /* Reset all MB rx and tx */
+
+  // for (i = 0; i < TOTALMBCOUNT; i++)
+  //   {
+  //     ninfo("MB %i %p\r\n", i, &priv->rx[i]);
+  //     ninfo("MB %i %p\r\n", i, &priv->rx[i].id.w);
+  //     priv->rx[i].cs.cs = 0x0;
+  //     priv->rx[i].id.w = 0x0;
+  //     priv->rx[i].data[0].w00 = 0x0;
+  //     priv->rx[i].data[1].w00 = 0x0;
+  //   }
 
 
   // Clear Tx mailbox entries in message RAM
@@ -1899,15 +1892,10 @@ int stm32_netinitialize(int intf)
 #endif
   priv->dev.d_private = (void *)priv;      /* Used to recover private state from dev */
 
-#ifdef TX_TIMEOUT_WQ
-  for (int i = 0; i < TXMBCOUNT; i++)
-    {
-      priv->txtimeout[i] = wd_create();    /* Create TX timeout timer */
-    }
-
-#endif
   /// JACOB TODO: I set these later when I configure the message RAM for the interface.
   ///             Is that okay?
+  /// UPDATE: 'stm32_ifdown()' calls 'stm32_reset()', which clears rx and tx.  Need
+  ///         them to not be null by then.
   priv->rx = NULL;
   priv->tx = NULL;
 
