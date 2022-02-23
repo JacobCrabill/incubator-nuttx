@@ -388,6 +388,16 @@
 #define GPIO_TIM1_CH3NOUT GPIO_TIM1_CH3NOUT_3 /* PE12 - D39 */
 #define GPIO_TIM1_CH4OUT  GPIO_TIM1_CH4OUT_2  /* PE14 - D38 */
 
+/* FDCAN1 */
+/// TODO: Some pines are labeled "FD". Is there any difference? See ref. manual.
+#define GPIO_CAN1_RX GPIO_CAN1_RX_3 /* PD0 */
+#define GPIO_CAN1_TX GPIO_CAN1_TX_3 /* PD1 */
+
+/* FDCAN2 */
+
+#define GPIO_CAN2_RX GPIO_CAN2_RX_2 /* PB5 - D11 */
+#define GPIO_CAN2_TX GPIO_CAN2_TX_2 /* PB6 - D1 */
+
 /* DMA **********************************************************************/
 
 #define DMAMAP_SPI3_RX DMAMAP_DMA12_SPI3RX_0 /* DMA1 */

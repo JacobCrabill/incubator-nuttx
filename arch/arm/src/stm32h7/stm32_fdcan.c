@@ -43,9 +43,7 @@
 
 #include "arm_arch.h"
 #include "chip.h"
-#include "hardware/stm32_fdcan.h"
-#include "hardware/stm32_pinmap.h"
-#include "stm32_fdcan.h"
+#include "stm32.h"
 
 #include <arch/board/board.h>
 
@@ -69,10 +67,6 @@
 
 #define CANWORK LPWORK
 
-/* CONFIG_STM32_FLEXCAN_NETHIFS determines the number of physical
- * interfaces that will be supported.
- */
-
 #define MASKSTDID                   0x000007ff
 #define MASKEXTID                   0x1fffffff
 #define FLAGEFF                     (1 << 31) /* Extended frame format */
@@ -81,14 +75,6 @@
 #define RXMBCOUNT                   5
 #define TXMBCOUNT                   2
 #define TOTALMBCOUNT                RXMBCOUNT + TXMBCOUNT
-
-#define IFLAG1_RX                   ((1 << RXMBCOUNT)-1)
-#define IFLAG1_TX                   (((1 << TXMBCOUNT)-1) << RXMBCOUNT)
-
-#define CAN_FIFO_NE                 (1 << 5)
-#define CAN_FIFO_OV                 (1 << 6)
-#define CAN_FIFO_WARN               (1 << 7)
-#define CAN_EFF_FLAG                0x80000000 /* EFF/SFF is set in the MSB */
 
 #define POOL_SIZE                   1
 
@@ -102,20 +88,7 @@
 #define STM32_FDCANCLK              STM32_HSE_FREQUENCY
 #define CLK_FREQ                    STM32_FDCANCLK
 #define PRESDIV_MAX                 256
-/// TODO: All of these min/max vals...
-#define SEG_MAX                     8
-#define SEG_MIN                     1
-#define TSEG_MIN                    2
-#define TSEG1_MAX                   17
-#define TSEG2_MAX                   9
-#define NUMTQ_MAX                   26
-
-#define SEG_FD_MAX                  32
-#define SEG_FD_MIN                  1
-#define TSEG_FD_MIN                 2
-#define TSEG1_FD_MAX                39
-#define TSEG2_FD_MAX                9
-#define NUMTQ_FD_MAX                49
+/// TODO: Be a good developer and put other important constants/constraints here
 
 /* Message RAM */
 #define WORD_LENGTH                 4U
@@ -136,6 +109,7 @@ static int peak_tx_mailbox_index_ = 0;
  * Private Types
  ****************************************************************************/
 
+/* CAN Statistics? */
 union cs_e
 {
   volatile uint32_t cs;
@@ -195,6 +169,7 @@ struct mb_s
 };
 
 #ifdef CONFIG_NET_CAN_RAW_TX_DEADLINE
+/// TODO: This feature won't compile just yet... FIXME
 #define TX_ABORT -1
 #define TX_FREE 0
 #define TX_BUSY 1
@@ -240,7 +215,7 @@ struct fdcan_message_ram
 
 /* FDCAN device structures */
 
-#ifdef CONFIG_STM32_FDCAN1
+#ifdef CONFIG_STM32H7_FDCAN1
 static const struct fdcan_config_s stm32_fdcan0_config =
 {
   .tx_pin      = GPIO_CAN1_TX,
@@ -260,11 +235,11 @@ static const struct fdcan_config_s stm32_fdcan0_config =
 };
 #endif
 
-#ifdef CONFIG_STM32_FDCAN2
+#ifdef CONFIG_STM32H7_FDCAN2
 static const struct fdcan_config_s stm32_fdcan1_config =
 {
-  .tx_pin      = PIN_CAN1_TX,
-  .rx_pin      = PIN_CAN1_RX,
+  .tx_pin      = GPIO_CAN2_TX,
+  .rx_pin      = GPIO_CAN1_RX,
 #ifdef GPIO_CAN2_ENABLE
   .enable_pin  = GPIO_CAN2_ENABLE,
   .enable_high = CAN2_ENABLE_OUT,
@@ -327,11 +302,11 @@ struct stm32_driver_s
  * Private Data
  ****************************************************************************/
 
-#ifdef CONFIG_STM32_FDCAN1
+#ifdef CONFIG_STM32H7_FDCAN1
 static struct stm32_driver_s g_fdcan0;
 #endif
 
-#ifdef CONFIG_STM32_FDCAN2
+#ifdef CONFIG_STM32H7_FDCAN2
 static struct stm32_driver_s g_fdcan1;
 #endif
 
@@ -696,7 +671,7 @@ static int stm32_transmit(FAR struct stm32_driver_s *priv)
     {
       struct can_frame *frame = (struct can_frame *)priv->dev.d_buf;
 
-      if (frame->can_id & CAN_EFF_FLAG)
+      if (frame->can_id & FLAGEFF)
         {
           cs.ide = 1;
           mb->id.ext = frame->can_id & MASKEXTID;
@@ -719,7 +694,7 @@ static int stm32_transmit(FAR struct stm32_driver_s *priv)
 
       cs.edl = 1; /* CAN FD Frame */
 
-      if (frame->can_id & CAN_EFF_FLAG)
+      if (frame->can_id & FLAGEFF)
         {
           cs.ide = 1;
           mb->id.ext = frame->can_id & MASKEXTID;
@@ -1825,7 +1800,7 @@ int stm32_caninitialize(int intf)
 
   switch (intf)
     {
-#ifdef CONFIG_STM32_FDCAN1
+#ifdef CONFIG_STM32H7_FDCAN1
     case 0:
       priv             = &g_fdcan0;
       memset(priv, 0, sizeof(struct stm32_driver_s));
@@ -1844,7 +1819,7 @@ int stm32_caninitialize(int intf)
       break;
 #endif
 
-#ifdef CONFIG_STM32_FDCAN2
+#ifdef CONFIG_STM32H7_FDCAN2
     case 1:
       priv             = &g_fdcan1;
       memset(priv, 0, sizeof(struct stm32_driver_s));
@@ -1939,7 +1914,7 @@ int stm32_caninitialize(int intf)
  * Name: up_netinitialize
  *
  * Description:
- *   Initialize the first network interface.  If there are more than one
+ *   Initialize the CAN device interfaces.  If there is more than one device
  *   interface in the chip, then board-specific logic will have to provide
  *   this function to determine which, if any, Ethernet controllers should
  *   be initialized.
