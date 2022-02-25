@@ -33,8 +33,8 @@
  *
  ************************************************************************************/
 
-#ifndef __ARCH_ARM_SRC_STM32_STM32_FDCAN_H
-#define __ARCH_ARM_SRC_STM32_STM32_FDCAN_H
+#ifndef __ARCH_ARM_SRC_STM32H7_STM32_FDCAN_H
+#define __ARCH_ARM_SRC_STM32H7_STM32_FDCAN_H
 
 /************************************************************************************
  * Included Files
@@ -44,7 +44,7 @@
 
 #include "hardware/stm32_fdcan.h"
 
-#ifdef CONFIG_STM32_FDCAN
+#ifdef CONFIG_STM32H7_FDCAN
 
 /************************************************************************************
  * Pre-processor Definitions
@@ -65,8 +65,10 @@ extern "C"
 #define EXTERN extern
 #endif
 
+#if !defined(CONFIG_NETDEV_LATEINIT)
+
 /************************************************************************************
- * Function: up_netinitialize
+ * Function: arm_netinitialize
  *
  * Description:
  *   Initialize the first network interface.  If there are more than one
@@ -85,25 +87,30 @@ extern "C"
  *
  ************************************************************************************/
 
-void up_netinitialize(void);
+void arm_netinitialize(void);
 
-/************************************************************************************
- * Function: stm32_phy_boardinitialize
+#else
+
+/****************************************************************************
+ * Function: stm32_caninitialize
  *
  * Description:
- *   Some boards require specialized initialization of the PHY before it can be
- *   used.  This may include such things as configuring GPIOs, resetting the PHY,
- *   etc.  If CONFIG_STM32_FDCAN_PHYINIT is defined in the configuration then the
- *   board specific logic must provide stm32_phyinitialize();  The STM RT Ethernet
- *   driver will call this function one time before it first uses the PHY.
+ *   Initialize the CAN controller and driver
  *
  * Input Parameters:
- *   intf - Always zero for now.
+ *   intf - In the case where there are multiple CAN devices, this value
+ *          identifies which CAN device is to be initialized.
  *
  * Returned Value:
  *   OK on success; Negated errno on failure.
  *
- ************************************************************************************/
+ * Assumptions:
+ *
+ ****************************************************************************/
+
+int stm32_caninitialize(int intf);
+
+#endif
 
 #undef EXTERN
 #if defined(__cplusplus)
@@ -111,5 +118,5 @@ void up_netinitialize(void);
 #endif
 
 #endif /* __ASSEMBLY__ */
-#endif /* CONFIG_STM32_FDCAN */
-#endif /* __ARCH_ARM_SRC_STM32_STM32_FDCAN_H */
+#endif /* CONFIG_STM32H7_FDCAN */
+#endif /* __ARCH_ARM_SRC_STM32H7_STM32_FDCAN_H */

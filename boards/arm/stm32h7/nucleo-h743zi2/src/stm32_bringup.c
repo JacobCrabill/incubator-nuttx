@@ -37,6 +37,10 @@
 #include "stm32_usbhost.h"
 #endif
 
+#ifdef CONFIG_STM32H7_FDCAN
+#include "stm32_fdcan.h"
+#endif
+
 #include "nucleo-h743zi2.h"
 
 /****************************************************************************
@@ -172,6 +176,18 @@ int stm32_bringup(void)
              "ERROR: Failed to start USB monitor: %d\n",
              ret);
     }
+#endif
+
+#ifdef CONFIG_NETDEV_LATEINIT
+
+# ifdef CONFIG_STM32H7_FDCAN1
+  stm32_caninitialize(0);
+# endif
+
+# ifdef CONFIG_STM32H7_FDCAN2
+  stm32_caninitialize(1);
+# endif
+
 #endif
 
   return OK;

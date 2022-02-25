@@ -1858,11 +1858,11 @@ int stm32_caninitialize(int intf)
     }
 #endif
 
-  stm32_pinconfig(priv->config->tx_pin);
-  stm32_pinconfig(priv->config->rx_pin);
+  stm32_configgpio(priv->config->tx_pin);
+  stm32_configgpio(priv->config->rx_pin);
   if (priv->config->enable_pin > 0)
     {
-      stm32_pinconfig(priv->config->enable_pin);
+      stm32_configgpio(priv->config->enable_pin);
       stm32_gpiowrite(priv->config->enable_pin, priv->config->enable_high);
     }
 
@@ -1911,7 +1911,7 @@ int stm32_caninitialize(int intf)
 }
 
 /****************************************************************************
- * Name: up_netinitialize
+ * Name: arm_netinitialize
  *
  * Description:
  *   Initialize the CAN device interfaces.  If there is more than one device
@@ -1922,7 +1922,7 @@ int stm32_caninitialize(int intf)
  ****************************************************************************/
 
 #if !defined(CONFIG_NETDEV_LATEINIT)
-void up_netinitialize(void)
+void arm_netinitialize(void)
 {
 #ifdef CONFIG_STM32H7_FDCAN1
   stm32_caninitialize(0);
