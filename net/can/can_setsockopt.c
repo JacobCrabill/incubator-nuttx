@@ -140,8 +140,8 @@ int can_setsockopt(FAR struct socket *psock, int option,
 
         break;
 
-#ifdef CONFIG_NET_CAN_CANFD
       case CAN_RAW_FD_FRAMES:
+#ifdef CONFIG_NET_CAN_CANFD
         if (value_len != sizeof(conn->fd_frames))
           {
             return -EINVAL;
@@ -150,6 +150,9 @@ int can_setsockopt(FAR struct socket *psock, int option,
           conn->fd_frames = *(FAR int32_t *)value;
 
           break;
+#else
+        nerr("ERROR: CAN FD frames not enabled\n");
+        return -ENOTSUP;
 #endif
 
       case CAN_RAW_JOIN_FILTERS:
