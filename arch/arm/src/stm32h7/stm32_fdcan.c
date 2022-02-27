@@ -492,6 +492,7 @@ static int  stm32_txpoll(struct net_driver_s *dev);
 
 /* Helper functions */
 
+static void stm32_apb1hreset(void);
 static void stm32_setinit(uint32_t base, uint32_t init);
 static void stm32_setenable(uint32_t base, uint32_t enable);
 static void stm32_setconfig(uint32_t base, uint32_t config_enable);
@@ -839,7 +840,7 @@ static void stm32_receive(FAR struct stm32_driver_s *priv)
   const uint32_t ir_fifo0 = FDCAN_IR_RF0N | FDCAN_IR_RF0F;
   const uint32_t ir_fifo1 = FDCAN_IR_RF1N | FDCAN_IR_RF1F;
   uint8_t fifo_id;
-
+  printf("**interrupt received**\n");
   if (regval & ir_fifo0)
     {
       regval = ir_fifo0;
@@ -1086,7 +1087,7 @@ static int stm32_fdcan_interrupt(int irq, FAR void *context,
                                  FAR void *arg)
 {
   FAR struct stm32_driver_s *priv = (struct stm32_driver_s *)arg;
-
+  printf("**fdcan_interrupt**\n");
   if (irq == priv->config->mb_irq[0])
     {
       /* Rx Interrupt */
@@ -1180,6 +1181,11 @@ static void stm32_txtimeout_expiry(int argc, uint32_t arg, ...)
 
 #endif
 
+static void stm32_apb1hreset(void)
+{
+  modifyreg32(STM32_RCC_APB1HRSTR, 0, RCC_APB1HRSTR_FDCANRST);
+  modifyreg32(STM32_RCC_APB1HRSTR, RCC_APB1HRSTR_FDCANRST, 0);
+}
 
 static void stm32_setinit(uint32_t base, uint32_t init)
 {
@@ -1242,8 +1248,7 @@ static uint32_t stm32_waitccr_change(uint32_t base, uint32_t mask,
   const unsigned timeout = 1000;
   for (unsigned wait_ack = 0; wait_ack < timeout; wait_ack++)
     {
-      const bool state = (getreg32(base + STM32_FDCAN_CCCR_OFFSET) & mask)
-          != 0;
+      const bool state = (getreg32(base + STM32_FDCAN_CCCR_OFFSET) & mask) != 0;
       if (state == target_state)
         {
           return true;
@@ -1257,12 +1262,12 @@ static uint32_t stm32_waitccr_change(uint32_t base, uint32_t mask,
 
 static void stm32_enable_interrupts(struct stm32_driver_s *priv)
 {
+  // Enable both interrupt lines at the device level
+  putreg32(FDCAN_ILE_EINT0 | FDCAN_ILE_EINT1, priv->base + STM32_FDCAN_ILE_OFFSET);
+
   // Enable both lines at the NVIC (Nested Vector Interrupt Controller) level
   up_enable_irq(priv->config->mb_irq[0]);
   up_enable_irq(priv->config->mb_irq[1]);
-
-  // Enable both interrupt lines at the device level
-  putreg32(FDCAN_ILE_EINT0 | FDCAN_ILE_EINT1, priv->base + STM32_FDCAN_ILE_OFFSET);
 }
 
 static void stm32_disable_interrupts(struct stm32_driver_s *priv)
@@ -1272,7 +1277,7 @@ static void stm32_disable_interrupts(struct stm32_driver_s *priv)
   up_disable_irq(priv->config->mb_irq[1]);
 
   // Disable both interrupt lines at the device level
-  putreg32(FDCAN_ILE_EINT0 | FDCAN_ILE_EINT1, priv->base + STM32_FDCAN_ILE_OFFSET);
+  putreg32(0, priv->base + STM32_FDCAN_ILE_OFFSET);
 }
 
 
@@ -1299,6 +1304,10 @@ static int stm32_ifup(struct net_driver_s *dev)
 
   /* Wake up the device and enter config mode */
 
+  printf("[stm32h7] ifup %s\n", dev->d_ifname);
+
+  irqstate_t flags = enter_critical_section();
+
   stm32_setenable(priv->base, 1);
   stm32_setinit(priv->base, 1);
   stm32_setconfig(priv->base, 1);
@@ -1310,6 +1319,8 @@ static int stm32_ifup(struct net_driver_s *dev)
   /* Leave init mode */
 
   stm32_setinit(priv->base, 0);
+
+  leave_critical_section(flags);
 
   priv->bifup = true;
 
@@ -1337,9 +1348,13 @@ static int stm32_ifdown(struct net_driver_s *dev)
   FAR struct stm32_driver_s *priv =
     (FAR struct stm32_driver_s *)dev->d_private;
 
+  net_lock();
+
   stm32_reset(priv);
 
   priv->bifup = false;
+
+  net_unlock();
 
   return OK;
 }
@@ -1518,10 +1533,15 @@ static int stm32_ioctl(struct net_driver_s *dev, int cmd,
 int stm32_initialize(struct stm32_driver_s *priv)
 {
   uint32_t regval;
+
+  irqstate_t flags = enter_critical_section();
   
   /*
    * Wake up the device and enable configuration changes
    */
+
+  stm32_apb1hreset();
+
   // Exit Power-down / Sleep mode, then wait for acknowledgement
   stm32_setenable(priv->base, 1);
 
@@ -1543,10 +1563,11 @@ int stm32_initialize(struct stm32_driver_s *priv)
 
   int32_t timings_res = stm32_bitratetotimeseg(&priv->arbi_timing, 0);
 
-  if (timings_res < 0) {
-    stm32_setinit(priv->base, 0);
-    return timings_res;
-  }
+  if (timings_res < 0)
+    {
+      stm32_setinit(priv->base, 0);
+      return timings_res;
+    }
 
 #ifdef DEBUG
   {
@@ -1568,10 +1589,11 @@ int stm32_initialize(struct stm32_driver_s *priv)
   
   timings_res = stm32_bitratetotimeseg(&priv->data_timing, 1);
 
-  if (timings_res < 0) {
-    stm32_setinit(priv->base, 0);
-    return timings_res;
-  }
+  if (timings_res < 0)
+    {
+      stm32_setinit(priv->base, 0);
+      return timings_res;
+    }
 
 #ifdef DEBUG
   const fdcan_timeseg *tim = &priv->data_timing;
@@ -1580,12 +1602,14 @@ int stm32_initialize(struct stm32_driver_s *priv)
   
   /* Set bit timings and prescalers (Data bitrate) */
 
-  regval = ((priv->data_timing.sjw << FDCAN_DBTP_NSJW_SHIFT)  |
-            (priv->data_timing.bs1 << FDCAN_DBTP_NTSEG1_SHIFT) |
-            (priv->data_timing.bs2 << FDCAN_DBTP_TSEG2_SHIFT)  |
-            (priv->data_timing.prescaler << FDCAN_DBTP_NBRP_SHIFT));
+  regval = ((priv->data_timing.sjw << FDCAN_DBTP_DSJW_SHIFT)  |
+            (priv->data_timing.bs1 << FDCAN_DBTP_DTSEG1_SHIFT) |
+            (priv->data_timing.bs2 << FDCAN_DBTP_DTSEG2_SHIFT)  |
+            (priv->data_timing.prescaler << FDCAN_DBTP_DBRP_SHIFT));
+#endif // NET_CAN_CANFD
+  
+  // Be sure to fill data-phase register even if we're not using CAN FD
   putreg32(regval, priv->base + STM32_FDCAN_DBTP_OFFSET);
-#endif
 
   /*
    * Operation Configuration
@@ -1714,6 +1738,8 @@ int stm32_initialize(struct stm32_driver_s *priv)
    */
    stm32_setinit(priv->base, 0);
 
+   leave_critical_section(flags);
+
   return 0;
 }
 
@@ -1736,6 +1762,8 @@ int stm32_initialize(struct stm32_driver_s *priv)
 static void stm32_reset(struct stm32_driver_s *priv)
 {
   /* Request Init Mode */
+
+  irqstate_t flags = enter_critical_section();
 
   stm32_setenable(priv->base, 1);
   stm32_setinit(priv->base, 1);
@@ -1786,7 +1814,10 @@ static void stm32_reset(struct stm32_driver_s *priv)
 
   /* Power off the device -- See RM0433 pg 2493 */
   
+  stm32_setinit(priv->base, 0);
   stm32_setenable(priv->base, 0);
+
+  leave_critical_section(flags);
 }
 
 /****************************************************************************
