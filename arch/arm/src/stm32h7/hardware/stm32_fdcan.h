@@ -1012,7 +1012,7 @@
 
 /*****************  Bit definition for FDCAN_TXBC register  *********************/
 #define FDCAN_TXBC_TBSA_SHIFT     (2U)
-#define FDCAN_TXBC_TBSA_MASK      (0x3FU << FDCAN_TXBC_TBSA_SHIFT)              /*!< 0x000000FC */
+#define FDCAN_TXBC_TBSA_MASK      (0x3FFFU << FDCAN_TXBC_TBSA_SHIFT)            /*!< 0x0000FFFC */
 #define FDCAN_TXBC_TBSA           FDCAN_TXBC_TBSA_MASK                          /*!<Tx Buffers Start Address                  */
 #define FDCAN_TXBC_NDTB_SHIFT     (16U)
 #define FDCAN_TXBC_NDTB_MASK      (0x3FU << FDCAN_TXBC_NDTB_SHIFT)              /*!< 0x003F0000 */
