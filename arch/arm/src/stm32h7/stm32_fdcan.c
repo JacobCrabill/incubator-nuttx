@@ -418,6 +418,37 @@ static inline uint32_t arm_lsb(unsigned int value)
   return ret;
 }
 
+static void dumpregs(FAR struct stm32_driver_s *priv)
+{
+  printf("-------------- Reg Dump ----------------\n");
+  printf("CAN%d Base: 0x%lx\n", priv->iface_idx, priv->base);
+
+  uint32_t regval;
+  regval = getreg32(priv->base + STM32_FDCAN_CCCR_OFFSET);
+  printf("CCCR = 0x%lx\n", regval);
+  regval = getreg32(priv->base + STM32_FDCAN_ECR_OFFSET);
+  printf("ECR  = 0x%lx\n", regval);
+
+  regval = getreg32(priv->base + STM32_FDCAN_IR_OFFSET);
+  printf("IR   = 0x%lx\n", regval);
+  regval = getreg32(priv->base + STM32_FDCAN_IE_OFFSET);
+  printf("IE   = 0x%lx\n", regval);
+  regval = getreg32(priv->base + STM32_FDCAN_ILE_OFFSET);
+  printf("ILE = 0x%lx\n", regval);
+  regval = getreg32(priv->base + STM32_FDCAN_ILS_OFFSET);
+  printf("ILS = 0x%lx\n", regval);
+
+  regval = getreg32(priv->base + STM32_FDCAN_NBTP_OFFSET);
+  printf("NBTP = 0x%lx\n", regval);
+  regval = getreg32(priv->base + STM32_FDCAN_DBTP_OFFSET);
+  printf("DBTP = 0x%lx\n", regval);
+
+  regval = getreg32(priv->base + STM32_FDCAN_TXBC_OFFSET);
+  printf("TXBC = 0x%lx\n", regval);
+  regval = getreg32(priv->base + STM32_FDCAN_RXF0C_OFFSET);
+  printf("RXF0C = 0x%lx\n", regval);
+}
+
 /****************************************************************************
  * Name: stm32_bitratetotimeseg
  *
@@ -664,6 +695,7 @@ static bool stm32_txringfull(FAR struct stm32_driver_s *priv)
 
 static int stm32_transmit(FAR struct stm32_driver_s *priv)
 {
+  printf("----transmit()\n");
   /** JACOB TODO ---
     0. Assumptions: dev.d_buf contains a frame waiting to be transmitted.
     1. Find the next free Tx mailbox index
@@ -1484,6 +1516,8 @@ static int stm32_ifup(struct net_driver_s *dev)
 
   irqstate_t flags = enter_critical_section();
 
+  dumpregs(priv);
+
   stm32_setenable(priv->base, 1);
   stm32_setinit(priv->base, 1);
   stm32_setconfig(priv->base, 1);
@@ -1495,6 +1529,8 @@ static int stm32_ifup(struct net_driver_s *dev)
   /* Leave init mode */
 
   stm32_setinit(priv->base, 0);
+
+  dumpregs(priv);
 
   leave_critical_section(flags);
 
@@ -1643,7 +1679,7 @@ static int stm32_ioctl(struct net_driver_s *dev, int cmd,
       (FAR struct stm32_driver_s *)dev->d_private;
 
   int ret;
-
+printf("<>stm32_ioctl(%lu)<>\n", arg); /// DEBUGGING
   switch (cmd)
     {
       case SIOCGCANBITRATE: /* Get bitrate from a CAN controller */
@@ -1730,6 +1766,8 @@ int stm32_initialize(struct stm32_driver_s *priv)
 
   // Disable interrupts while we configure the hardware
   putreg32(0, priv->base + STM32_FDCAN_IE_OFFSET);
+
+  dumpregs(priv);
 
   /*
    * CAN timings for this bitrate
@@ -1832,6 +1870,8 @@ int stm32_initialize(struct stm32_driver_s *priv)
   // Note: You must still call stm32_enable_interrupts() to set ILE
   // (interrupt line enable)
 
+  dumpregs(priv);
+
   /*
    * Configure Message RAM
    *
@@ -1919,12 +1959,16 @@ int stm32_initialize(struct stm32_driver_s *priv)
   regval &= ~FDCAN_GFC_ANFE;  // Accept non-matching extid frames into FIFO0
   putreg32(regval, priv->base + STM32_FDCAN_GFC_OFFSET);
 
+  dumpregs(priv);
+
   /*
    * Exit Initialization mode
    */
-   stm32_setinit(priv->base, 0);
+  stm32_setinit(priv->base, 0);
 
-   leave_critical_section(flags);
+  dumpregs(priv);
+
+  leave_critical_section(flags);
 
   return 0;
 }
@@ -2008,7 +2052,7 @@ static void stm32_reset(struct stm32_driver_s *priv)
   /* Power off the device -- See RM0433 pg 2493 */
   
   stm32_setinit(priv->base, 0);
-  stm32_setenable(priv->base, 0);
+  // stm32_setenable(priv->base, 0);
 
   leave_critical_section(flags);
 }
@@ -2160,6 +2204,9 @@ int stm32_caninitialize(int intf)
   /* Register the device with the OS so that socket IOCTLs can be performed */
 
   netdev_register(&priv->dev, NET_LL_CAN);
+
+  printf("<><>End stm32_caninitialize()<><>\n");
+  dumpregs(priv);
 
   return OK;
 }
