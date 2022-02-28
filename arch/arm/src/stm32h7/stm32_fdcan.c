@@ -260,8 +260,6 @@ struct fdcan_config_s
 {
   uint32_t tx_pin;           /* GPIO configuration for TX */
   uint32_t rx_pin;           /* GPIO configuration for RX */
-  uint32_t enable_pin;       /* Optional enable pin */
-  uint32_t enable_high;      /* Optional enable high/low */
   uint32_t mb_irq[2];        /* FDCAN Interrupt 0, 1 (Rx, Tx) */
 };
 
@@ -295,13 +293,6 @@ static const struct fdcan_config_s stm32_fdcan0_config =
 {
   .tx_pin      = GPIO_CAN1_TX,
   .rx_pin      = GPIO_CAN1_RX,
-#ifdef GPIO_CAN1_ENABLE
-  .enable_pin  = GPIO_CAN1_ENABLE,
-  .enable_high = CAN1_ENABLE_OUT,
-#else
-  .enable_pin  = 0,
-  .enable_high = 0,
-#endif
   .mb_irq      =
   {
     STM32_IRQ_FDCAN1_0,
@@ -315,13 +306,6 @@ static const struct fdcan_config_s stm32_fdcan1_config =
 {
   .tx_pin      = GPIO_CAN2_TX,
   .rx_pin      = GPIO_CAN1_RX,
-#ifdef GPIO_CAN2_ENABLE
-  .enable_pin  = GPIO_CAN2_ENABLE,
-  .enable_high = CAN2_ENABLE_OUT,
-#else
-  .enable_pin  = 0,
-  .enable_high = 0,
-#endif
   .mb_irq      =
   {
     STM32_IRQ_FDCAN2_0,
@@ -457,15 +441,14 @@ static void dumpregs(FAR struct stm32_driver_s *priv)
  *
  * Input Parameters:
  *   timeseg - structure to store bit timing
- *   can_fd - if set to calculate CAN FD data-segment bit timings, otherwise
- *            calculate classical can timings
+ *   can_fd - if set to true calculate CAN FD data-segment bit timings,
+ *            otherwise calculate classical can timings
  *
  * Returned Value:
- *   return 1 on succes, return 0 on failure
- *
+ *   OK on success; >0 on failure.
  ****************************************************************************/
 
-uint32_t stm32_bitratetotimeseg(struct fdcan_timeseg *timeseg, uint32_t can_fd)
+int32_t stm32_bitratetotimeseg(struct fdcan_timeseg *timeseg, bool can_fd)
 {
   /// TODO: Verify this works for data phase of CAN-FD as well
   /* 
@@ -511,7 +494,7 @@ uint32_t stm32_bitratetotimeseg(struct fdcan_timeseg *timeseg, uint32_t can_fd)
         {
           syslog(LOG_INFO, "foobar ----------------\n");
           ninfo("Target bitrate too high - no solution possible.");
-          return 0; // No solution
+          return 1; // No solution
         }
 
       bs1_bs2_sum--;
@@ -522,7 +505,7 @@ uint32_t stm32_bitratetotimeseg(struct fdcan_timeseg *timeseg, uint32_t can_fd)
   if ((prescaler < 1U) || (prescaler > 1024U))
     {
       ninfo("Target bitrate invalid - bad prescaler.");
-      return 0; // No solution
+      return 2; // No solution
     }
 
   /*
@@ -571,7 +554,7 @@ uint32_t stm32_bitratetotimeseg(struct fdcan_timeseg *timeseg, uint32_t can_fd)
     {
       printf("valid: %d, found bitrate: %lu\n", valid, (CLK_FREQ / (prescaler * (1 + bs1 + bs2))));
       ninfo("Target bitrate invalid - solution does not match.");
-      return 0; // Solution not found
+      return 3; // Solution not found
     }
 
   timeseg->bs1 = (uint8_t)(bs1 - 1);
@@ -579,7 +562,7 @@ uint32_t stm32_bitratetotimeseg(struct fdcan_timeseg *timeseg, uint32_t can_fd)
   timeseg->prescaler = (uint16_t)(prescaler - 1);
   timeseg->sjw = 0; // Which means one
 
-  return 1;
+  return 0;
 }
 
 /* Common TX logic */
@@ -677,8 +660,8 @@ static bool stm32_txringfull(FAR struct stm32_driver_s *priv)
  * Function: stm32_transmit
  *
  * Description:
- *   Start hardware transmission.  Called either from the txdone interrupt
- *   handling or from watchdog based polling.
+ *   Start hardware transmission of the data contained in priv->d_buf.  Called
+ *   either from the txdone interrupt handling or from watchdog based polling.
  *
  * Input Parameters:
  *   priv  - Reference to the driver state structure
@@ -696,15 +679,6 @@ static bool stm32_txringfull(FAR struct stm32_driver_s *priv)
 static int stm32_transmit(FAR struct stm32_driver_s *priv)
 {
   printf("----transmit()\n");
-  /** JACOB TODO ---
-    0. Assumptions: dev.d_buf contains a frame waiting to be transmitted.
-    1. Find the next free Tx mailbox index
-    2. Copy the frame from dev.d_buf (points to txdesc array) into CAN msg RAM
-    3. Request hardware transmission of the mailbox item
-    4. Notify the NuttX network layer of transmission
-    5. Setup Tx timout watchdog if enabled
-  */
-
   /* From UAVCAN uc_stm32h7_can.cpp: */
   /*
    * Normally we should perform the same check as in @ref canAcceptNewTxFrame(), because
@@ -745,7 +719,7 @@ static int stm32_transmit(FAR struct stm32_driver_s *priv)
 
   struct tx_fifo_s *mb = &priv->tx[mbi];
 
-  /* Attempt to write frame */
+  /* Setup timeout deadline if enabled */
 
 #ifdef CONFIG_NET_CAN_RAW_TX_DEADLINE
   int32_t timeout = 0;
@@ -785,6 +759,8 @@ static int stm32_transmit(FAR struct stm32_driver_s *priv)
         }
     }
 #endif
+
+  /* Attempt to write frame */
 
   /* For statistics purposes, keep track of highest waterline in TX mailbox */
   peak_tx_mbi_ = (peak_tx_mbi_ > mbi ? peak_tx_mbi_ : mbi);
@@ -1560,13 +1536,9 @@ static int stm32_ifdown(struct net_driver_s *dev)
   FAR struct stm32_driver_s *priv =
     (FAR struct stm32_driver_s *)dev->d_private;
 
-  net_lock();
-
   stm32_reset(priv);
 
   priv->bifup = false;
-
-  net_unlock();
 
   return OK;
 }
@@ -1603,7 +1575,7 @@ static void stm32_txavail_work(FAR void *arg)
 
       if (!stm32_txringfull(priv))
         {
-          /* No, there is space for another transfer.  Poll the network for
+          /* There is space for another transfer.  Poll the network for
            * new XMIT data.
            */
 
@@ -1736,7 +1708,7 @@ printf("<>stm32_ioctl(%lu)<>\n", arg); /// DEBUGGING
  *   priv - Reference to the private FDCAN driver state structure
  *
  * Returned Value:
- *   None
+ *   OK on success; Negated errno on failure.
  *
  * Assumptions:
  *
@@ -1775,12 +1747,10 @@ int stm32_initialize(struct stm32_driver_s *priv)
 
   // Nominal / arbitration phase bitrate
 
-  int32_t timings_res = stm32_bitratetotimeseg(&priv->arbi_timing, 0);
-
-  if (timings_res < 0)
+  if (stm32_bitratetotimeseg(&priv->arbi_timing, false) != OK)
     {
       stm32_setinit(priv->base, 0);
-      return timings_res;
+      return -EIO;
     }
 
 #ifdef DEBUG
@@ -1801,12 +1771,10 @@ int stm32_initialize(struct stm32_driver_s *priv)
 #ifdef CONFIG_NET_CAN_CANFD
   // CAN-FD Data phase bitrate
   
-  timings_res = stm32_bitratetotimeseg(&priv->data_timing, 1);
-
-  if (timings_res < 0)
+  if (stm32_bitratetotimeseg(&priv->data_timing, true) != OK)
     {
       stm32_setinit(priv->base, 0);
-      return timings_res;
+      return -EIO;
     }
 
 #ifdef DEBUG
@@ -1902,7 +1870,8 @@ int stm32_initialize(struct stm32_driver_s *priv)
   const uint32_t gl_ram_base = STM32_CANRAM_BASE;
   uint32_t ram_offset = iface_ram_base;
 
-  // Standard ID Filters: Allow space for 128 filters (128 words)
+  /* Standard ID Filters: Allow space for 128 filters (128 words) */
+
   const uint8_t n_stdid = 128;
   priv->message_ram.filt_stdid_addr = gl_ram_base + ram_offset * WORD_LENGTH;
 
@@ -1911,9 +1880,11 @@ int stm32_initialize(struct stm32_driver_s *priv)
   putreg32(regval, priv->base + STM32_FDCAN_SIDFC_OFFSET);
   ram_offset += n_stdid;
 
-  // Extended ID Filters: Allow space for 128 filters (128 words)
+  /* Extended ID Filters: Allow space for 128 filters (128 words) */
+
   const uint8_t n_extid = 128;
   priv->message_ram.filt_extid_addr = gl_ram_base + ram_offset * WORD_LENGTH;
+
   regval = (n_extid << FDCAN_XIDFC_LSE_SHIFT) & FDCAN_XIDFC_LSE_MASK;
   regval |= ram_offset << FDCAN_XIDFC_FLESA_SHIFT;
   putreg32(regval, priv->base + STM32_FDCAN_XIDFC_OFFSET);
@@ -1929,24 +1900,28 @@ int stm32_initialize(struct stm32_driver_s *priv)
   priv->message_ram.n_rxfifo1 = NUM_RX_FIFO1;
   priv->message_ram.n_txfifo = NUM_TX_FIFO;
 
-  // Set Rx FIFO0 size (64 elements max)
-  priv->message_ram.rxfifo0_addr = gl_ram_base + ram_offset * WORD_LENGTH;
-  priv->rx = (struct rx_fifo_s *)(gl_ram_base + ram_offset * WORD_LENGTH);
-  putreg32(ram_offset << FDCAN_RXF0C_F0SA_SHIFT, priv->base + STM32_FDCAN_RXF0C_OFFSET);
+  /* Assign Rx Mailbox pointer in the driver structure */
 
-  regval = ram_offset << FDCAN_RXF0C_F0SA_SHIFT;
+  priv->message_ram.rxfifo0_addr = gl_ram_base + ram_offset * WORD_LENGTH;
+  priv->rx = (struct rx_fifo_s *)(priv->message_ram.rxfifo0_addr);
+
+  // Set Rx FIFO0 size (64 elements max)
+  regval = (ram_offset << FDCAN_RXF0C_F0SA_SHIFT) & FDCAN_RXF0C_F0SA_MASK;
   regval |= (NUM_RX_FIFO0 << FDCAN_RXF0C_F0S_SHIFT) & FDCAN_RXF0C_F0S_MASK;
   putreg32(regval, priv->base + STM32_FDCAN_RXF0C_OFFSET);
   ram_offset += NUM_RX_FIFO0 * FIFO_ELEMENT_SIZE;
 
-  // Not using Rx FIFO1
+  /* Not using Rx FIFO1 */
+
+  /* Assign Tx Mailbox pointer in the driver structure */
+
+  priv->message_ram. txfifo_addr = gl_ram_base + ram_offset * WORD_LENGTH;
+  priv->tx = (struct tx_fifo_s *)(priv->message_ram.txfifo_addr);
 
   // Set Tx FIFO size (32 elements max)
-  priv->message_ram. txfifo_addr = gl_ram_base + ram_offset * WORD_LENGTH;
-  priv->tx = (struct tx_fifo_s *)(gl_ram_base + ram_offset * WORD_LENGTH);
   regval = (NUM_TX_FIFO << FDCAN_TXBC_TFQS_SHIFT) & FDCAN_TXBC_TFQS_MASK;
   regval &= ~FDCAN_TXBC_TFQM;  // Use FIFO
-  regval |= ram_offset << FDCAN_TXBC_TBSA_SHIFT;
+  regval |= (ram_offset << FDCAN_TXBC_TBSA_SHIFT) & FDCAN_TXBC_TBSA_MASK;
   putreg32(regval, priv->base + STM32_FDCAN_TXBC_OFFSET);
 
   /*
@@ -1958,6 +1933,8 @@ int stm32_initialize(struct stm32_driver_s *priv)
   regval &= ~FDCAN_GFC_ANFS;  // Accept non-matching stdid frames into FIFO0
   regval &= ~FDCAN_GFC_ANFE;  // Accept non-matching extid frames into FIFO0
   putreg32(regval, priv->base + STM32_FDCAN_GFC_OFFSET);
+
+  /* Clear message RAM */
 
   dumpregs(priv);
 
@@ -2017,6 +1994,7 @@ static void stm32_reset(struct stm32_driver_s *priv)
       nerr("reset requies prior initialization\n");
       return;
     }
+
 #ifdef CONFIG_NET_CAN_CANFD
   const uint8_t n_data_words = 16;
 #else
@@ -2052,7 +2030,7 @@ static void stm32_reset(struct stm32_driver_s *priv)
   /* Power off the device -- See RM0433 pg 2493 */
   
   stm32_setinit(priv->base, 0);
-  // stm32_setenable(priv->base, 0);
+  // stm32_setenable(priv->base, 0); /// TODO: Does this reset our config?
 
   leave_critical_section(flags);
 }
@@ -2127,7 +2105,7 @@ int stm32_caninitialize(int intf)
       return -ENODEV;
     }
 
-  if (!stm32_bitratetotimeseg(&priv->arbi_timing, 0))
+  if (stm32_bitratetotimeseg(&priv->arbi_timing, false) != OK)
     {
       printf("ERROR: Invalid CAN timings: please try another sample point "
            "or refer to the reference manual\n");
@@ -2135,7 +2113,7 @@ int stm32_caninitialize(int intf)
     }
 
 #ifdef CONFIG_NET_CAN_CANFD
-  if (!stm32_bitratetotimeseg(&priv->data_timing, 1))
+  if (stm32_bitratetotimeseg(&priv->data_timing, true) != OK)
     {
       printf("ERROR: Invalid CAN data phase timings: please try another "
            "sample point or refer to the reference manual\n");
@@ -2147,11 +2125,6 @@ int stm32_caninitialize(int intf)
 
   stm32_configgpio(priv->config->tx_pin);
   stm32_configgpio(priv->config->rx_pin);
-  if (priv->config->enable_pin > 0)
-    {
-      stm32_configgpio(priv->config->enable_pin);
-      stm32_gpiowrite(priv->config->enable_pin, priv->config->enable_high);
-    }
 
   /* Attach the fdcan interrupt handlers */
 
