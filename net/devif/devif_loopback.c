@@ -63,6 +63,11 @@ static bool is_loopback(FAR struct net_driver_s *dev)
           return true;
         }
 #endif
+
+#ifdef CONFIG_NET_CAN_LOOPBACK
+      /// TODO: Add 'CONFIG_NET_CAN_LOOPBACK' to Kconfig
+      #warning CAN Loopback is not yet implemented
+#endif
     }
 
   return false;
