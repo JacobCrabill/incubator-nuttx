@@ -104,6 +104,8 @@
 #define PRESDIV_MAX                 256
 /// TODO: Be a good developer and put other important constants/constraints here
 
+#define FDCAN_IR_MASK 0x3fcfffff // Mask of all non-reserved bits in FDCAN_IR
+
 #ifdef CONFIG_NET_CAN_RAW_TX_DEADLINE
 
 #  if !defined(CONFIG_SCHED_WORKQUEUE)
@@ -451,9 +453,9 @@ static void dumpregs(FAR struct stm32_driver_s *priv)
 int32_t stm32_bitratetotimeseg(struct fdcan_timeseg *timeseg, bool can_fd)
 {
   /// TODO: Verify this works for data phase of CAN-FD as well
-  /* 
+  /*
    * Implementation ported from PX4's uavcan_drivers/stm32[h7]
-   * 
+   *
    * Ref. "Automatic Baudrate Detection in CANopen Networks", U. Koppe, MicroControl GmbH & Co. KG
    *      CAN in Automation, 2003
    *
@@ -464,7 +466,7 @@ int32_t stm32_bitratetotimeseg(struct fdcan_timeseg *timeseg, bool can_fd)
    *   250  kbps      16      17
    *   125  kbps      16      17
    */
-  const uint32_t target_bitrate = timeseg->bitrate;  
+  const uint32_t target_bitrate = timeseg->bitrate;
   static const int32_t MaxBS1 = 16;
   static const int32_t MaxBS2 = 8;
   const uint8_t max_quanta_per_bit = (timeseg->bitrate >= 1000000) ? 10 : 17;
@@ -531,7 +533,7 @@ int32_t stm32_bitratetotimeseg(struct fdcan_timeseg *timeseg, bool can_fd)
   uint8_t bs1 = (uint8_t)((7 * bs1_bs2_sum - 1) + 4) / 8;
   uint8_t bs2 = (uint8_t)(bs1_bs2_sum - bs1);
   uint16_t sample_point_permill = (uint16_t)(1000 * (1 + bs1) / (1 + bs1 + bs2));
-  
+
   if (sample_point_permill > MaxSamplePointLocation)
     {
       // Second attempt with rounding to zero
@@ -972,7 +974,7 @@ static void stm32_receive(FAR struct stm32_driver_s *priv)
     }
 
   /* Write the corresponding interrupt bits to reset them */
-      
+
   putreg32(regval, priv->base + STM32_FDCAN_IR_OFFSET);
 
   // Bitwise register definitions are the same for FIFO 0/1
@@ -1376,7 +1378,7 @@ static void stm32_setinit(uint32_t base, uint32_t init)
   if (init)
     {
       /* Enter hardware initialization mode */
-      
+
       modifyreg32(base + STM32_FDCAN_CCCR_OFFSET, 0, FDCAN_CCCR_INIT);
       stm32_waitccr_change(base, FDCAN_CCCR_INIT, FDCAN_CCCR_INIT);
     }
@@ -1447,7 +1449,7 @@ static uint32_t stm32_waitccr_change(uint32_t base, uint32_t mask,
 static void stm32_enable_interrupts(struct stm32_driver_s *priv)
 {
   // Enable both interrupt lines at the device level
-  putreg32(FDCAN_ILE_EINT0 | FDCAN_ILE_EINT1, priv->base + STM32_FDCAN_ILE_OFFSET);
+  modifyreg32(priv->base + STM32_FDCAN_ILE_OFFSET, 0, FDCAN_ILE_EINT0 | FDCAN_ILE_EINT1);
 
   // Enable both lines at the NVIC (Nested Vector Interrupt Controller) level
   up_enable_irq(priv->config->mb_irq[0]);
@@ -1461,7 +1463,7 @@ static void stm32_disable_interrupts(struct stm32_driver_s *priv)
   up_disable_irq(priv->config->mb_irq[1]);
 
   // Disable both interrupt lines at the device level
-  putreg32(0, priv->base + STM32_FDCAN_ILE_OFFSET);
+  modifyreg32(priv->base + STM32_FDCAN_ILE_OFFSET, FDCAN_ILE_EINT0 | FDCAN_ILE_EINT1, 0);
 }
 
 
@@ -1497,11 +1499,11 @@ static int stm32_ifup(struct net_driver_s *dev)
   stm32_setenable(priv->base, 1);
   stm32_setinit(priv->base, 1);
   stm32_setconfig(priv->base, 1);
-  
+
   /* Enable interrupts (at both device and NVIC level) */
 
   stm32_enable_interrupts(priv);
-  
+
   /* Leave init mode */
 
   stm32_setinit(priv->base, 0);
@@ -1719,7 +1721,7 @@ int stm32_initialize(struct stm32_driver_s *priv)
   uint32_t regval;
 
   irqstate_t flags = enter_critical_section();
-  
+
   /*
    * Wake up the device and enable configuration changes
    */
@@ -1770,7 +1772,7 @@ int stm32_initialize(struct stm32_driver_s *priv)
 
 #ifdef CONFIG_NET_CAN_CANFD
   // CAN-FD Data phase bitrate
-  
+
   if (stm32_bitratetotimeseg(&priv->data_timing, true) != OK)
     {
       stm32_setinit(priv->base, 0);
@@ -1781,7 +1783,7 @@ int stm32_initialize(struct stm32_driver_s *priv)
   const fdcan_timeseg *tim = &priv->data_timing;
   ninfo("[data] Timings: presc=%u sjw=%u bs1=%u bs2=%u\r\n", tim->prescaler, tim->sjw, tim->bs1, tim->bs2);
 #endif
-  
+
   /* Set bit timings and prescalers (Data bitrate) */
 
   regval = ((priv->data_timing.sjw << FDCAN_DBTP_DSJW_SHIFT)  |
@@ -1789,7 +1791,7 @@ int stm32_initialize(struct stm32_driver_s *priv)
             (priv->data_timing.bs2 << FDCAN_DBTP_DTSEG2_SHIFT)  |
             (priv->data_timing.prescaler << FDCAN_DBTP_DBRP_SHIFT));
 #endif // NET_CAN_CANFD
-  
+
   // Be sure to fill data-phase register even if we're not using CAN FD
   putreg32(regval, priv->base + STM32_FDCAN_DBTP_OFFSET);
 
@@ -1818,7 +1820,7 @@ int stm32_initialize(struct stm32_driver_s *priv)
 
   // Clear all interrupt flags
   // Note: A flag is cleared by writing a 1 to the corresponding bit position
-  putreg32(0xFFFFFFFF, priv->base + STM32_FDCAN_IR_OFFSET);
+  putreg32(FDCAN_IR_MASK, priv->base + STM32_FDCAN_IR_OFFSET);
 
   // Enable relevant interrupts
   regval = FDCAN_IE_TCE     // Transmit Complete
@@ -1974,7 +1976,7 @@ static void stm32_reset(struct stm32_driver_s *priv)
 
   stm32_setenable(priv->base, 1);
   stm32_setinit(priv->base, 1);
-  
+
   /* Enable Configuration Change Mode */
 
   stm32_setconfig(priv->base, 1);
@@ -1985,7 +1987,7 @@ static void stm32_reset(struct stm32_driver_s *priv)
 
   // Clear all interrupt flags
   // Note: A flag is cleared by writing a 1 to the corresponding bit position
-  putreg32(0xFFFFFFFF, priv->base + STM32_FDCAN_IR_OFFSET);
+  putreg32(FDCAN_IR_MASK, priv->base + STM32_FDCAN_IR_OFFSET);
 
   /* Reset all message RAM mailboxes; RX and TX */
 
@@ -2028,7 +2030,7 @@ static void stm32_reset(struct stm32_driver_s *priv)
     }
 
   /* Power off the device -- See RM0433 pg 2493 */
-  
+
   stm32_setinit(priv->base, 0);
   // stm32_setenable(priv->base, 0); /// TODO: Does this reset our config?
 
@@ -2169,7 +2171,7 @@ int stm32_caninitialize(int intf)
   stm32_initialize(priv);
 
   printf(">> stm32_caninitialize successful\n"); /// DEBUGGING
-  
+
   /* Put the interface in the down state (disable interrupts, enter sleep mode) */
 
   stm32_ifdown(&priv->dev);
