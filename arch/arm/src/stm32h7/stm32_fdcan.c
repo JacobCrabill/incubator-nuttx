@@ -1725,8 +1725,10 @@ int stm32_initialize(struct stm32_driver_s *priv)
   /*
    * Wake up the device and enable configuration changes
    */
-
-  stm32_apb1hreset();
+  if (priv->iface_idx == 0)
+    {
+      stm32_apb1hreset();
+    }
 
   // Exit Power-down / Sleep mode, then wait for acknowledgement
   stm32_setenable(priv->base, 1);
