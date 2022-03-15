@@ -815,13 +815,13 @@ static int stm32_transmit(FAR struct stm32_driver_s *priv)
       else
         {
           header.id.xtd = 0;  // Standard ID frame
-          header.id.id = frame->can_id & CAN_STD_MASK;
+          header.id.stdid = frame->can_id & CAN_STD_MASK;
         }
 
       const bool brs = (priv->arbi_timing.bitrate == priv->data_timing.bitrate) ? 0 : 1;
 
-      header.id.std.esi = frame->can_id & CAN_ERR_FLAG ? 1 : 0;
-      header.id.std.rtr = frame->can_id & CAN_RTR_FLAG ? 1 : 0;
+      header.id.esi = (frame->can_id & CAN_ERR_FLAG) ? 1 : 0;
+      header.id.rtr = (frame->can_id & CAN_RTR_FLAG) ? 1 : 0;
       header.dlc = len_to_can_dlc[frame->len];
       header.brs = brs; // Bitrate switching
       header.fdf = 1; // CAN-FD frame
@@ -949,8 +949,33 @@ static int stm32_txpoll(struct net_driver_s *dev)
  *
  ****************************************************************************/
 
+static void stm32_irprint(FAR struct stm32_driver_s *priv)
+{
+  uint32_t regval = getreg32(priv->base + STM32_FDCAN_IR_OFFSET);
+
+  printf(">> IR = 0x%lx\n", regval);
+  printf("IR.PEA (Protocol Error Arb): %d\n", (regval & FDCAN_IR_PEA) > 0);
+  printf("IR.WDI (Watchdog intr): %d\n", (regval & FDCAN_IR_WDI) > 0);
+  printf("IR.BO (Bus Off): %d\n", (regval & FDCAN_IR_BO) > 0);
+  printf("IR.EW (Warning Status) : %d\n", (regval & FDCAN_IR_EW) > 0);
+  printf("IR.EP (Error Passive): %d\n", (regval & FDCAN_IR_EP) > 0);
+  printf("IR.ELO (Error Logging Overflow): %d\n", (regval & FDCAN_IR_ELO) > 0);
+  printf("IR.TOO (Timeout Occurred): %d\n", (regval & FDCAN_IR_TOO) > 0);
+  printf("IR.MRAF (Msg RAM Access Failure): %d\n", (regval & FDCAN_IR_MRAF) > 0);
+  // printf("IR. (): %d\n", (regval & FDCAN_IR_) > 0);
+  // printf("IR. (): %d\n", (regval & FDCAN_IR_) > 0);
+  // printf("IR. (): %d\n", (regval & FDCAN_IR_) > 0);
+  // printf("IR. (): %d\n", (regval & FDCAN_IR_) > 0);
+  // printf("IR. (): %d\n", (regval & FDCAN_IR_) > 0);
+  // printf("IR. (): %d\n", (regval & FDCAN_IR_) > 0);
+  // printf("IR. (): %d\n", (regval & FDCAN_IR_) > 0);
+  // printf("IR. (): %d\n", (regval & FDCAN_IR_) > 0);
+}
+
 static void stm32_receive(FAR struct stm32_driver_s *priv)
 {
+  stm32_irprint(priv); /// DEBUGGING
+
   uint32_t regval = getreg32(priv->base + STM32_FDCAN_IR_OFFSET);
 
   const uint32_t ir_fifo0 = FDCAN_IR_RF0N | FDCAN_IR_RF0F;
@@ -1228,16 +1253,29 @@ static void stm32_txdone(FAR struct stm32_driver_s *priv)
 static int stm32_fdcan_interrupt(int irq, FAR void *context,
                                  FAR void *arg)
 {
-  FAR struct stm32_driver_s *priv = (struct stm32_driver_s *)arg;
-printf("**fdcan_interrupt**\n");
-  if (irq == priv->config->mb_irq[0])
-    {
-      stm32_receive(priv); /* Rx Interrupt */
+  printf("**fdcan_interrupt - %d**\n", irq); /// DEBUGGING
 
-    }
-  else if (irq == priv->config->mb_irq[1])
+  switch (irq)
     {
-        stm32_txdone(priv); /* Tx Complete Interrupt */
+      case STM32_IRQ_FDCAN1_0:
+        stm32_receive(&g_fdcan0);
+        break;
+
+      case STM32_IRQ_FDCAN1_1:
+        stm32_txdone(&g_fdcan0);
+        break;
+
+      case STM32_IRQ_FDCAN2_0:
+        stm32_receive(&g_fdcan1);
+        break;
+
+      case STM32_IRQ_FDCAN2_1:
+        stm32_txdone(&g_fdcan1);
+        break;
+
+      default:
+        nerr("Unexpected IRQ [%d]\n", irq);
+        return -1;
     }
 
   return OK;
@@ -1645,21 +1683,21 @@ static int stm32_txavail(struct net_driver_s *dev)
  *
  ****************************************************************************/
 
-#ifdef CONFIG_NETDEV_CAN_BITRATE_IOCTL
+#ifdef CONFIG_NETDEV_IOCTL
 static int stm32_ioctl(struct net_driver_s *dev, int cmd,
-                         unsigned long arg)
+                       unsigned long arg)
 {
-  FAR struct stm32_driver_s *priv =
-      (FAR struct stm32_driver_s *)dev->d_private;
+  FAR struct stm32_driver_s *priv = dev->d_private;
 
   int ret;
 printf("<>stm32_ioctl(%lu)<>\n", arg); /// DEBUGGING
   switch (cmd)
     {
+#ifdef CONFIG_NETDEV_CAN_BITRATE_IOCTL
       case SIOCGCANBITRATE: /* Get bitrate from a CAN controller */
         {
-          struct can_ioctl_data_s *req =
-              (struct can_ioctl_data_s *)((uintptr_t)arg);
+          struct can_ioctl_bitrate_s *req =
+              (struct can_ioctl_bitrate_s *)((uintptr_t)arg);
           req->arbi_bitrate = priv->arbi_timing.bitrate / 1000; /* kbit/s */
 #ifdef CONFIG_NET_CAN_CANFD
           req->data_bitrate = priv->data_timing.bitrate / 1000; /* kbit/s */
@@ -1672,8 +1710,8 @@ printf("<>stm32_ioctl(%lu)<>\n", arg); /// DEBUGGING
 
       case SIOCSCANBITRATE: /* Set bitrate of a CAN controller */
         {
-          struct can_ioctl_data_s *req =
-              (struct can_ioctl_data_s *)((uintptr_t)arg);
+          struct can_ioctl_bitrate_s *req =
+              (struct can_ioctl_bitrate_s *)((uintptr_t)arg);
 
           priv->arbi_timing.bitrate = req->arbi_bitrate * 1000;
 #ifdef CONFIG_NET_CAN_CANFD
@@ -1690,9 +1728,44 @@ printf("<>stm32_ioctl(%lu)<>\n", arg); /// DEBUGGING
             }
         }
         break;
+#endif /* CONFIG_NETDEV_CAN_BITRATE_IOCTL */
+
+#ifdef CONFIG_NETDEV_CAN_FILTER_IOCTL
+      case SIOCACANEXTFILTER:
+        {
+          /// TODO: Add hardware-level filter...
+          
+          stm32_addextfilter(priv, (FAR struct canioc_extfilter_s *)arg);
+        }
+        break;
+      
+      case SIOCDCANEXTFILTER:
+        {
+          /// TODO: Delete hardware-level filter...
+          
+          stm32_delextfilter(priv, (FAR struct canioc_extfilter_s *)arg);
+        }
+        break;
+
+      case SIOCACANSTDFILTER:
+        {
+          /// TODO: Add hardware-level filter...
+          
+          stm32_addstdfilter(priv, (FAR struct canioc_stdfilter_s *)arg);
+        }
+        break;
+
+      case SIOCDCANSTDFILTER:
+        {
+          /// TODO: Delete hardware-level filter...
+          
+          stm32_delstdfilter(priv, (FAR struct canioc_stdfilter_s *)arg);
+        }
+        break;
+#endif
 
       default:
-        ret = -ENOTTY;
+        ret = -ENOTSUP;
         break;
     }
 
@@ -1754,6 +1827,7 @@ int stm32_initialize(struct stm32_driver_s *priv)
   if (stm32_bitratetotimeseg(&priv->arbi_timing, false) != OK)
     {
       stm32_setinit(priv->base, 0);
+      leave_critical_section(flags);
       return -EIO;
     }
 
@@ -1778,6 +1852,7 @@ int stm32_initialize(struct stm32_driver_s *priv)
   if (stm32_bitratetotimeseg(&priv->data_timing, true) != OK)
     {
       stm32_setinit(priv->base, 0);
+      leave_critical_section(flags);
       return -EIO;
     }
 
@@ -1801,17 +1876,33 @@ int stm32_initialize(struct stm32_driver_s *priv)
    * Operation Configuration
    */
 
-  /// TODO:
-#ifdef CONFIG_NET_CAN_SILENT
-  /* Enable Bus Monitoring or Restricted Operation Mode (RM0433 pg 2492)*/
-#endif
 #ifdef CONFIG_NET_CAN_LOOPBACK
-  /* Enable Internal or External Loop-Back Mode (RM0433 pg 2494) */
+  /* Enable External Loopback Mode (Rx pin disconnected) (RM0433 pg 2494) */
+  modifyreg32(priv->base + STM32_FDCAN_CCCR_OFFSET, 0, FDCAN_CCCR_TEST);
+  modifyreg32(priv->base + STM32_FDCAN_TEST_OFFSET, 0, FDCAN_TEST_LBCK);
 #endif
 
+#ifdef CONFIG_NET_CAN_SILENT
+  /* Enable Bus Monitoring or Restricted Operation Mode (RM0433 pg 2492)*/
+  modifyreg32(priv->base + STM32_FDCAN_CCCR_OFFSET, 0, FDCAN_CCCR_MON);
+#endif
+
+#ifdef CONFIG_NET_CAN_CANFD
+  // Enable CAN-FD communication
+  modifyreg32(priv->base + STM32_FDCAN_CCCR_OFFSET, 0, FDCAN_CCCR_FDOE);
+  if (priv->arbi_timing.bitrate != priv->data_timing.bitrate)
+    {
+      // Enable bitrate switching if requested via config
+      modifyreg32(priv->base + STM32_FDCAN_CCCR_OFFSET, 0, FDCAN_CCCR_BRSE);
+    }
+#else
   // Disable CAN-FD communications ("classic" CAN only)
-  /// JACOB: TODO: Enable CAN FD based on CONFIG
   modifyreg32(priv->base + STM32_FDCAN_CCCR_OFFSET, FDCAN_CCCR_FDOE, 0);
+#endif
+
+  // Disable Automatic Retransmission of frames upon error
+  // NOTE: This will even disable automatic retry due to lost arbitration!!
+  modifyreg32(priv->base + STM32_FDCAN_CCCR_OFFSET, 0, FDCAN_CCCR_DAR);
 
   // Disable Time Triggered (TT) operation -- TODO (must use TTCAN_TypeDef)
   //ttcan_->TTOCF &= ~FDCAN_TTOCF_OM
@@ -1826,6 +1917,13 @@ int stm32_initialize(struct stm32_driver_s *priv)
 
   // Enable relevant interrupts
   regval = FDCAN_IE_TCE     // Transmit Complete
+         | FDCAN_IE_PEAE    // Protocol Error Arbitration Phase  /// DEBUGGING
+         | FDCAN_IE_PEDE    // Protocol Error Data Phase  /// DEBUGGING
+         | FDCAN_IE_MRAFE   // Message RAM Access Failure  /// DEBUGGING
+         | FDCAN_IE_TOOE    // Time Out Occurred  /// DEBUGGING
+         | FDCAN_IE_EWE     // Warning Status  /// DEBUGGING
+         | FDCAN_IE_EPE     // Error Passive  /// DEBUGGING
+         | FDCAN_IE_ELOE    // Error Logging Overflow  /// DEBUGGING
          | FDCAN_IE_RF0NE   // Rx FIFO 0 new message
          | FDCAN_IE_RF0FE   // Rx FIFO 0 FIFO full
          | FDCAN_IE_RF1NE   // Rx FIFO 1 new message
@@ -1834,6 +1932,8 @@ int stm32_initialize(struct stm32_driver_s *priv)
 
   // Keep Rx interrupts on Line 0; move Tx to Line 1
   // TC (Tx Complete) interrupt on line 1
+  regval = getreg32(priv->base + STM32_FDCAN_ILS_OFFSET);
+  regval |= FDCAN_ILS_TCL; 
   putreg32(FDCAN_ILS_TCL, priv->base + STM32_FDCAN_ILS_OFFSET);
 
   // Enable Tx buffer transmission interrupt
@@ -1996,6 +2096,7 @@ static void stm32_reset(struct stm32_driver_s *priv)
   if (priv->rx == NULL || priv->tx == NULL)
     {
       nerr("reset requies prior initialization\n");
+      leave_critical_section(flags);
       return;
     }
 
@@ -2111,16 +2212,14 @@ int stm32_caninitialize(int intf)
 
   if (stm32_bitratetotimeseg(&priv->arbi_timing, false) != OK)
     {
-      printf("ERROR: Invalid CAN timings: please try another sample point "
-           "or refer to the reference manual\n");
+      printf("ERROR: Invalid CAN timings\n");
       return -1;
     }
 
 #ifdef CONFIG_NET_CAN_CANFD
   if (stm32_bitratetotimeseg(&priv->data_timing, true) != OK)
     {
-      printf("ERROR: Invalid CAN data phase timings: please try another "
-           "sample point or refer to the reference manual\n");
+      printf("ERROR: Invalid CAN data phase timings\n");
       return -1;
     }
 #endif
@@ -2132,7 +2231,7 @@ int stm32_caninitialize(int intf)
 
   /* Attach the fdcan interrupt handlers */
 
-  if (irq_attach(priv->config->mb_irq[0], stm32_fdcan_interrupt, priv))
+  if (irq_attach(priv->config->mb_irq[0], stm32_fdcan_interrupt, NULL))
     {
       /* We could not attach the ISR to the interrupt */
 
@@ -2140,7 +2239,7 @@ int stm32_caninitialize(int intf)
       return -EAGAIN;
     }
 
-  if (irq_attach(priv->config->mb_irq[1], stm32_fdcan_interrupt, priv))
+  if (irq_attach(priv->config->mb_irq[1], stm32_fdcan_interrupt, NULL))
     {
       /* We could not attach the ISR to the interrupt */
 
@@ -2194,8 +2293,8 @@ int stm32_caninitialize(int intf)
  * Description:
  *   Initialize the CAN device interfaces.  If there is more than one device
  *   interface in the chip, then board-specific logic will have to provide
- *   this function to determine which, if any, Ethernet controllers should
- *   be initialized.
+ *   this function to determine which, if any, CAN interfaces should be
+ *   initialized.
  *
  ****************************************************************************/
 
