@@ -1481,8 +1481,8 @@ static int kinetis_ioctl(struct net_driver_s *dev, int cmd,
     {
       case SIOCGCANBITRATE: /* Get bitrate from a CAN controller */
         {
-          struct can_ioctl_data_s *req =
-              (struct can_ioctl_data_s *)((uintptr_t)arg);
+          struct can_ioctl_bitrate_s *req =
+              (struct can_ioctl_bitrate_s *)((uintptr_t)arg);
           req->arbi_bitrate = priv->arbi_timing.bitrate / 1000; /* kbit/s */
           req->arbi_samplep = priv->arbi_timing.samplep;
 #ifdef CONFIG_NET_CAN_CANFD
@@ -1498,8 +1498,8 @@ static int kinetis_ioctl(struct net_driver_s *dev, int cmd,
 
       case SIOCSCANBITRATE: /* Set bitrate of a CAN controller */
         {
-          struct can_ioctl_data_s *req =
-              (struct can_ioctl_data_s *)((uintptr_t)arg);
+          struct can_ioctl_bitrate_s *req =
+              (struct can_ioctl_bitrate_s *)((uintptr_t)arg);
 
           struct flexcan_timeseg arbi_timing;
           arbi_timing.bitrate = req->arbi_bitrate * 1000;

@@ -74,8 +74,9 @@ config NET_CAN_RAW_DEFAULT_TX_DEADLINE
 		given.
 
 config NET_CAN_SILENT
-	int "Enable silent (listen-only) mode"
-	default 0
+	bool "Silent CAN bus / test mode"
+	#int "Enable silent (listen-only) mode"
+	#default 0
 	---help---
 		Value = 1:
 		  Put the transceiver into listen-only mode. In this mode, the
