@@ -78,12 +78,18 @@
 #define RAM_STDID_MASK              0x1ffc0000 /* (CAN_STD_MASK << 18) & CAN_EXT_MASK */
 
 #define WORD_LENGTH                 4U
-#define FIFO_ELEMENT_SIZE           4U // size (in Words) of a FIFO element in message RAM
 
-/// TODO: Define different values for CAN FD frames
-#define NUM_RX_FIFO0 64  // 64 elements max for RX FIFO0
-#define NUM_RX_FIFO1 0   // No elements for RX FIFO1
-#define NUM_TX_FIFO  32  // 32 elements max for TX queue
+#ifdef CONFIG_NET_CAN_CANFD
+# define FIFO_ELEMENT_SIZE 18 // size (in Words) of a FIFO element in message RAM (CANFD_MTU / 4)
+# define NUM_RX_FIFO0      14 // 14 elements max for RX FIFO0
+# define NUM_RX_FIFO1      0  // No elements for RX FIFO1
+# define NUM_TX_FIFO       7  // 7 elements max for TX queue
+#else
+# define FIFO_ELEMENT_SIZE 4  // size (in Words) of a FIFO element in message RAM (CAN_MTU / 4)
+# define NUM_RX_FIFO0      64 // 64 elements max for RX FIFO0
+# define NUM_RX_FIFO1      0  // No elements for RX FIFO1
+# define NUM_TX_FIFO       32 // 32 elements max for TX queue
+#endif
 
 /* Intermediate message buffering */
 
@@ -828,8 +834,6 @@ static int stm32_transmit(FAR struct stm32_driver_s *priv)
       // Store into message RAM
       mb->header.w1 = header.w1;
       mb->header.w0 = header.w0;
-      mb->data[0].word = __builtin_bswap32(*(uint32_t *)&frame->data[0]);
-      mb->data[1].word = __builtin_bswap32(*(uint32_t *)&frame->data[4]);
 
       uint32_t *frame_data_word = (uint32_t *)&frame->data[0];
 
