@@ -678,7 +678,6 @@ static bool stm32_txringfull(FAR struct stm32_driver_s *priv)
 
 static int stm32_transmit(FAR struct stm32_driver_s *priv)
 {
-  printf("----transmit()\n");
   /* From UAVCAN uc_stm32h7_can.cpp: */
   /*
    * Normally we should perform the same check as in @ref canAcceptNewTxFrame(), because
@@ -947,39 +946,39 @@ static int stm32_txpoll(struct net_driver_s *dev)
  *
  ****************************************************************************/
 
-static void stm32_irprint(FAR struct stm32_driver_s *priv)
-{
-  uint32_t regval = getreg32(priv->base + STM32_FDCAN_IR_OFFSET);
+// static void stm32_irprint(FAR struct stm32_driver_s *priv)
+// {
+//   uint32_t regval = getreg32(priv->base + STM32_FDCAN_IR_OFFSET);
 
-  printf(">> IR = 0x%lx\n", regval);
-  printf("IR.PEA (Protocol Error Arb): %d\n", (regval & FDCAN_IR_PEA) > 0);
-  printf("IR.WDI (Watchdog intr): %d\n", (regval & FDCAN_IR_WDI) > 0);
-  printf("IR.BO (Bus Off): %d\n", (regval & FDCAN_IR_BO) > 0);
-  printf("IR.EW (Warning Status) : %d\n", (regval & FDCAN_IR_EW) > 0);
-  printf("IR.EP (Error Passive): %d\n", (regval & FDCAN_IR_EP) > 0);
-  printf("IR.ELO (Error Logging Overflow): %d\n", (regval & FDCAN_IR_ELO) > 0);
-  printf("IR.TOO (Timeout Occurred): %d\n", (regval & FDCAN_IR_TOO) > 0);
-  printf("IR.MRAF (Msg RAM Access Failure): %d\n", (regval & FDCAN_IR_MRAF) > 0);
-  // printf("IR. (): %d\n", (regval & FDCAN_IR_) > 0);
-  // printf("IR. (): %d\n", (regval & FDCAN_IR_) > 0);
-  // printf("IR. (): %d\n", (regval & FDCAN_IR_) > 0);
-  // printf("IR. (): %d\n", (regval & FDCAN_IR_) > 0);
-  // printf("IR. (): %d\n", (regval & FDCAN_IR_) > 0);
-  // printf("IR. (): %d\n", (regval & FDCAN_IR_) > 0);
-  // printf("IR. (): %d\n", (regval & FDCAN_IR_) > 0);
-  // printf("IR. (): %d\n", (regval & FDCAN_IR_) > 0);
-}
+//   printf(">> IR = 0x%lx\n", regval);
+//   printf("IR.PEA (Protocol Error Arb): %d\n", (regval & FDCAN_IR_PEA) > 0);
+//   printf("IR.WDI (Watchdog intr): %d\n", (regval & FDCAN_IR_WDI) > 0);
+//   printf("IR.BO (Bus Off): %d\n", (regval & FDCAN_IR_BO) > 0);
+//   printf("IR.EW (Warning Status) : %d\n", (regval & FDCAN_IR_EW) > 0);
+//   printf("IR.EP (Error Passive): %d\n", (regval & FDCAN_IR_EP) > 0);
+//   printf("IR.ELO (Error Logging Overflow): %d\n", (regval & FDCAN_IR_ELO) > 0);
+//   printf("IR.TOO (Timeout Occurred): %d\n", (regval & FDCAN_IR_TOO) > 0);
+//   printf("IR.MRAF (Msg RAM Access Failure): %d\n", (regval & FDCAN_IR_MRAF) > 0);
+//   // printf("IR. (): %d\n", (regval & FDCAN_IR_) > 0);
+//   // printf("IR. (): %d\n", (regval & FDCAN_IR_) > 0);
+//   // printf("IR. (): %d\n", (regval & FDCAN_IR_) > 0);
+//   // printf("IR. (): %d\n", (regval & FDCAN_IR_) > 0);
+//   // printf("IR. (): %d\n", (regval & FDCAN_IR_) > 0);
+//   // printf("IR. (): %d\n", (regval & FDCAN_IR_) > 0);
+//   // printf("IR. (): %d\n", (regval & FDCAN_IR_) > 0);
+//   // printf("IR. (): %d\n", (regval & FDCAN_IR_) > 0);
+// }
 
 static void stm32_receive(FAR struct stm32_driver_s *priv)
 {
-  stm32_irprint(priv); /// DEBUGGING
+  // stm32_irprint(priv); /// DEBUGGING
 
   uint32_t regval = getreg32(priv->base + STM32_FDCAN_IR_OFFSET);
 
   const uint32_t ir_fifo0 = FDCAN_IR_RF0N | FDCAN_IR_RF0F;
   const uint32_t ir_fifo1 = FDCAN_IR_RF1N | FDCAN_IR_RF1F;
   uint8_t fifo_id;
-  printf("**interrupt received**\n");
+
   if (regval & ir_fifo0)
     {
       regval = ir_fifo0;
@@ -1251,8 +1250,6 @@ static void stm32_txdone(FAR struct stm32_driver_s *priv)
 static int stm32_fdcan_interrupt(int irq, FAR void *context,
                                  FAR void *arg)
 {
-  printf("**fdcan_interrupt - %d**\n", irq); /// DEBUGGING
-
   switch (irq)
     {
 #ifdef CONFIG_STM32H7_FDCAN1
@@ -1529,8 +1526,6 @@ static int stm32_ifup(struct net_driver_s *dev)
 
   /* Wake up the device and enter config mode */
 
-  printf("[stm32h7] ifup %s\n", dev->d_ifname);
-
   irqstate_t flags = enter_critical_section();
 
   dumpregs(priv);
@@ -1691,7 +1686,7 @@ static int stm32_ioctl(struct net_driver_s *dev, int cmd,
   FAR struct stm32_driver_s *priv = dev->d_private;
 
   int ret;
-printf("<>stm32_ioctl(%lu)<>\n", arg); /// DEBUGGING
+
   switch (cmd)
     {
 #ifdef CONFIG_NETDEV_CAN_BITRATE_IOCTL
@@ -1918,13 +1913,13 @@ int stm32_initialize(struct stm32_driver_s *priv)
 
   // Enable relevant interrupts
   regval = FDCAN_IE_TCE     // Transmit Complete
-         | FDCAN_IE_PEAE    // Protocol Error Arbitration Phase  /// DEBUGGING
-         | FDCAN_IE_PEDE    // Protocol Error Data Phase  /// DEBUGGING
-         | FDCAN_IE_MRAFE   // Message RAM Access Failure  /// DEBUGGING
-         | FDCAN_IE_TOOE    // Time Out Occurred  /// DEBUGGING
-         | FDCAN_IE_EWE     // Warning Status  /// DEBUGGING
-         | FDCAN_IE_EPE     // Error Passive  /// DEBUGGING
-         | FDCAN_IE_ELOE    // Error Logging Overflow  /// DEBUGGING
+        //  | FDCAN_IE_PEAE    // Protocol Error Arbitration Phase  /// DEBUGGING
+        //  | FDCAN_IE_PEDE    // Protocol Error Data Phase  /// DEBUGGING
+        //  | FDCAN_IE_MRAFE   // Message RAM Access Failure  /// DEBUGGING
+        //  | FDCAN_IE_TOOE    // Time Out Occurred  /// DEBUGGING
+        //  | FDCAN_IE_EWE     // Warning Status  /// DEBUGGING
+        //  | FDCAN_IE_EPE     // Error Passive  /// DEBUGGING
+        //  | FDCAN_IE_ELOE    // Error Logging Overflow  /// DEBUGGING
          | FDCAN_IE_RF0NE   // Rx FIFO 0 new message
          | FDCAN_IE_RF0FE   // Rx FIFO 0 FIFO full
          | FDCAN_IE_RF1NE   // Rx FIFO 1 new message
@@ -2165,7 +2160,6 @@ static void stm32_reset(struct stm32_driver_s *priv)
 int stm32_caninitialize(int intf)
 {
   struct stm32_driver_s *priv;
-  printf("------------ CANINIT can%d\n", intf); /// DEBUGGING
 
   switch (intf)
     {
@@ -2268,11 +2262,7 @@ int stm32_caninitialize(int intf)
 
   priv->dev.d_buf = (uint8_t *)priv->txdesc;
 
-  printf("high-level setup done; initializing device\r\n");
-
   stm32_initialize(priv);
-
-  printf(">> stm32_caninitialize successful\n"); /// DEBUGGING
 
   /* Put the interface in the down state (disable interrupts, enter sleep mode) */
 
@@ -2282,7 +2272,6 @@ int stm32_caninitialize(int intf)
 
   netdev_register(&priv->dev, NET_LL_CAN);
 
-  printf("<><>End stm32_caninitialize()<><>\n");
   dumpregs(priv);
 
   return OK;
@@ -2303,12 +2292,10 @@ int stm32_caninitialize(int intf)
 void arm_netinitialize(void)
 {
 #ifdef CONFIG_STM32H7_FDCAN1
-  printf("INIT CAN0 ------------------\n"); /// DEBUGGING
   stm32_caninitialize(0);
 #endif
 
 #ifdef CONFIG_STM32H7_FDCAN2
-  printf("INIT CAN1 ------------------\n"); /// DEBUGGING
   stm32_caninitialize(1);
 #endif
 }
