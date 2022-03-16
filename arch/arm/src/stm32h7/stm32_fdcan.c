@@ -1048,7 +1048,7 @@ static void stm32_receive(FAR struct stm32_driver_s *priv)
       /* Read the frame contents */
 
 #ifdef CONFIG_NET_CAN_CANFD
-      if (rf->header.id.fdf) /* CAN FD frame */
+      if (rf->header.fdf) /* CAN FD frame */
         {
           struct canfd_frame *frame = (struct canfd_frame *)priv->rxdesc;
 
