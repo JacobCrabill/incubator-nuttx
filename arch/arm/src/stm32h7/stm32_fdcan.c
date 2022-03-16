@@ -48,9 +48,7 @@
 
 #include <arch/board/board.h>
 
-#ifdef CONFIG_NET_CMSG
 #include <sys/time.h>
-#endif
 
 #ifndef OK
 #define OK 0
@@ -326,7 +324,7 @@ struct stm32_driver_s
   uint8_t iface_idx;            /* FDCAN interface index (0 or 1) */
   bool bifup;                   /* true:ifup false:ifdown */
 #ifdef TX_TIMEOUT_WQ
-  wdog_s txtimeout[NUM_TX_FIFO]; /* TX timeout timer */
+  struct wdog_s txtimeout[NUM_TX_FIFO]; /* TX timeout timer */
 #endif
   struct work_s irqwork;        /* For deferring interrupt work to the wq */
   struct work_s pollwork;       /* For deferring poll work to the work wq */
@@ -599,7 +597,7 @@ static void stm32_check_errors_isr(FAR struct stm32_driver_s *priv);
 /* Watchdog timer expirations */
 #ifdef TX_TIMEOUT_WQ
 static void stm32_txtimeout_work(FAR void *arg);
-static void stm32_txtimeout_expiry(int argc, uint32_t arg, ...);
+static void stm32_txtimeout_expiry(wdparm_t arg);
 #endif
 
 /* NuttX callback functions */
@@ -726,7 +724,7 @@ static int stm32_transmit(FAR struct stm32_driver_s *priv)
 #ifdef CONFIG_NET_CAN_RAW_TX_DEADLINE
   int32_t timeout = 0;
   struct timespec ts;
-  clock_systimespec(&ts);
+  clock_systime_timespec(&ts);
 
   if (priv->dev.d_sndlen > priv->dev.d_len)
     {
@@ -863,7 +861,7 @@ static int stm32_transmit(FAR struct stm32_driver_s *priv)
   if (timeout > 0)
     {
       wd_start(&priv->txtimeout[mbi], timeout + 1, stm32_txtimeout_expiry,
-                1, (wdparm_t)priv);
+               (wdparm_t)priv);
     }
 #endif
 
@@ -1214,7 +1212,7 @@ static void stm32_txdone(FAR struct stm32_driver_s *priv)
            * corresponding watchdog can be canceled.
            */
 
-          wd_cancel(&priv->txtimeout[mbi]);
+          wd_cancel(&priv->txtimeout[i]);
 #endif
         }
     }
@@ -1326,7 +1324,7 @@ static void stm32_check_errors_isr(FAR struct stm32_driver_s *priv)
           txi->pending = TX_FREE;
           NETDEV_TXERRORS(&priv->dev);
 #ifdef TX_TIMEOUT_WQ
-          wd_cancel(&priv->txtimeout[mbi]);
+          wd_cancel(&priv->txtimeout[i]);
 #endif
         }
     }
@@ -1352,7 +1350,7 @@ static void stm32_txtimeout_work(FAR void *arg)
 
   struct timespec ts;
   struct timeval *now = (struct timeval *)&ts;
-  clock_systimespec(&ts);
+  clock_systime_timespec(&ts);
   now->tv_usec = ts.tv_nsec / 1000; /* timespec to timeval conversion */
 
   /* The watchdog timed out, yet we still check mailboxes in case the
@@ -1366,7 +1364,6 @@ static void stm32_txtimeout_work(FAR void *arg)
           || now->tv_usec > priv->txmb[mbi].deadline.tv_usec))
         {
           NETDEV_TXTIMEOUTS(&priv->dev);
-          struct tx_fifo_s *mb = &priv->tx[mbi];
           priv->txmb[mbi].pending = TX_ABORT;
         }
     }
@@ -1393,7 +1390,7 @@ static void stm32_txtimeout_work(FAR void *arg)
  *
  ****************************************************************************/
 
-static void stm32_txtimeout_expiry(int argc, uint32_t arg, ...)
+static void stm32_txtimeout_expiry(wdparm_t arg)
 {
   FAR struct stm32_driver_s *priv = (FAR struct stm32_driver_s *)arg;
 
