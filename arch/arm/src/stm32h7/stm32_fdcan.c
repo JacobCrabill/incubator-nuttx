@@ -1255,6 +1255,7 @@ static int stm32_fdcan_interrupt(int irq, FAR void *context,
 
   switch (irq)
     {
+#ifdef CONFIG_STM32H7_FDCAN1
       case STM32_IRQ_FDCAN1_0:
         stm32_receive(&g_fdcan0);
         break;
@@ -1262,7 +1263,9 @@ static int stm32_fdcan_interrupt(int irq, FAR void *context,
       case STM32_IRQ_FDCAN1_1:
         stm32_txdone(&g_fdcan0);
         break;
+#endif
 
+#ifdef CONFIG_STM32H7_FDCAN2
       case STM32_IRQ_FDCAN2_0:
         stm32_receive(&g_fdcan1);
         break;
@@ -1270,6 +1273,7 @@ static int stm32_fdcan_interrupt(int irq, FAR void *context,
       case STM32_IRQ_FDCAN2_1:
         stm32_txdone(&g_fdcan1);
         break;
+#endif
 
       default:
         nerr("Unexpected IRQ [%d]\n", irq);
@@ -1731,15 +1735,15 @@ printf("<>stm32_ioctl(%lu)<>\n", arg); /// DEBUGGING
       case SIOCACANEXTFILTER:
         {
           /// TODO: Add hardware-level filter...
-          
+
           stm32_addextfilter(priv, (FAR struct canioc_extfilter_s *)arg);
         }
         break;
-      
+
       case SIOCDCANEXTFILTER:
         {
           /// TODO: Delete hardware-level filter...
-          
+
           stm32_delextfilter(priv, (FAR struct canioc_extfilter_s *)arg);
         }
         break;
@@ -1747,7 +1751,7 @@ printf("<>stm32_ioctl(%lu)<>\n", arg); /// DEBUGGING
       case SIOCACANSTDFILTER:
         {
           /// TODO: Add hardware-level filter...
-          
+
           stm32_addstdfilter(priv, (FAR struct canioc_stdfilter_s *)arg);
         }
         break;
@@ -1755,7 +1759,7 @@ printf("<>stm32_ioctl(%lu)<>\n", arg); /// DEBUGGING
       case SIOCDCANSTDFILTER:
         {
           /// TODO: Delete hardware-level filter...
-          
+
           stm32_delstdfilter(priv, (FAR struct canioc_stdfilter_s *)arg);
         }
         break;
@@ -1930,7 +1934,7 @@ int stm32_initialize(struct stm32_driver_s *priv)
   // Keep Rx interrupts on Line 0; move Tx to Line 1
   // TC (Tx Complete) interrupt on line 1
   regval = getreg32(priv->base + STM32_FDCAN_ILS_OFFSET);
-  regval |= FDCAN_ILS_TCL; 
+  regval |= FDCAN_ILS_TCL;
   putreg32(FDCAN_ILS_TCL, priv->base + STM32_FDCAN_ILS_OFFSET);
 
   // Enable Tx buffer transmission interrupt
