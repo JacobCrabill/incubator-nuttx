@@ -437,6 +437,11 @@ static void dumpregs(FAR struct stm32_driver_s *priv)
   printf("TXBC = 0x%lx\n", regval);
   regval = getreg32(priv->base + STM32_FDCAN_RXF0C_OFFSET);
   printf("RXF0C = 0x%lx\n", regval);
+
+  regval = getreg32(priv->base + STM32_FDCAN_RXESC_OFFSET);
+  printf("RXESC = 0x%lx\n", regval);
+  regval = getreg32(priv->base + STM32_FDCAN_TXESC_OFFSET);
+  printf("TXESC = 0x%lx\n", regval);
 }
 
 /****************************************************************************
@@ -1202,7 +1207,6 @@ static void stm32_txdone(FAR struct stm32_driver_s *priv)
             {
               /* This was a transmission that just now completed */
 
-              printf("--transmission completed from FIFO %d\n", i); /// DEBUGGING
               NETDEV_TXDONE(&priv->dev);
 
 #ifdef SW_LOOPBACK
@@ -2008,8 +2012,11 @@ int stm32_initialize(struct stm32_driver_s *priv)
 
   // Set size of each element in the Rx/Tx buffers and FIFOs
 #ifdef CONFIG_NET_CAN_CANFD
-  modifyreg32(priv->base + STM32_FDCAN_RXESC_OFFSET, 0, FDCAN_RXESC_RBDS); // Full 64 byte space for every element (Rx)
-  modifyreg32(priv->base + STM32_FDCAN_TXESC_OFFSET, 0, FDCAN_TXESC_TBDS); // Full 64 byte space for every element (Tx)
+  // Set full 64 byte space for every Rx/Tx FIFO element
+  modifyreg32(priv->base + STM32_FDCAN_RXESC_OFFSET, 0, FDCAN_RXESC_RBDS); // Rx Buffer
+  modifyreg32(priv->base + STM32_FDCAN_RXESC_OFFSET, 0, FDCAN_RXESC_F0DS); // Rx FIFO 0
+  modifyreg32(priv->base + STM32_FDCAN_RXESC_OFFSET, 0, FDCAN_RXESC_F1DS); // Rx FIFO 1
+  modifyreg32(priv->base + STM32_FDCAN_TXESC_OFFSET, 0, FDCAN_TXESC_TBDS); // Tx Buffer
 #else
   putreg32(0, priv->base + STM32_FDCAN_RXESC_OFFSET);  // 8 byte space for every element (Rx buffer, FIFO1, FIFO0)
   putreg32(0, priv->base + STM32_FDCAN_TXESC_OFFSET);  // 8 byte space for every element (Tx buffer)
