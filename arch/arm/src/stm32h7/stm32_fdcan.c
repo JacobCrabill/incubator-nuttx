@@ -710,10 +710,10 @@ static int stm32_transmit(FAR struct stm32_driver_s *priv)
       return -EBUSY;
     }
 
-  // Next, get the next available queue index from the controller
+  // Next, get the next available FIFO index from the controller
   const uint8_t mbi = (getreg32(priv->base + STM32_FDCAN_TXFQS_OFFSET) & FDCAN_TXFQS_TFQPI) >> FDCAN_TXFQS_TFQPI_SHIFT;
 
-  // Now, we can copy the CAN frame to the queue (in message RAM)
+  // Now, we can copy the CAN frame to the FIFO (in message RAM)
 
   if (mbi >= NUM_TX_FIFO)
     {
@@ -1192,31 +1192,41 @@ static void stm32_txdone(FAR struct stm32_driver_s *priv)
     {
       if ((getreg32(priv->base + STM32_FDCAN_TXBTO_OFFSET) & (1 << i)) > 0)
         {
-          NETDEV_TXDONE(&priv->dev);
+          // Transmission Occurred in buffer i [not necessarily a 'new' transmission, however]
+          // Check that it's a new transmission, not a previously handled transmission
+          /// TODO: Still need to check on handling timeouts and cancellations
 
-          /// TODO: How is loopback handled in SocketCAN?
-          // Transmission Occurred in buffer i
           struct txmbstats *txi = &priv->txmb[i];
-#ifdef SW_LOOPBACK
-          /// TODO: 'loopback' var is useless currently. Can user request loopback at socket level?
-          if (/*txi->loopback && */ txi->pending == TX_BUSY)
+
+          if (txi->pending == TX_BUSY)
             {
-              /* Send to socket interface */
-              /// TODO: I don't think this will work as-is
-              priv->dev.d_len = sizeof(txi->frame);
-              priv->dev.d_buf = (uint8_t *)&txi->frame;
-              can_input(&priv->dev);
-            }
+              /* This was a transmission that just now completed */
+
+              printf("--transmission completed from FIFO %d\n", i); /// DEBUGGING
+              NETDEV_TXDONE(&priv->dev);
+
+#ifdef SW_LOOPBACK
+              /// TODO: How is loopback handled in SocketCAN?
+              /// TODO: 'loopback' var is useless currently. Can user request loopback at socket level?
+              // if (txi->loopback)
+                {
+                  /* Send to socket interface */
+                  /// TODO: I don't think this will work as-is
+                  priv->dev.d_len = sizeof(txi->frame);
+                  priv->dev.d_buf = (uint8_t *)&txi->frame;
+                  can_input(&priv->dev);
+                }
 #endif
-          txi->pending = TX_FREE;
+             txi->pending = TX_FREE;
 
 #ifdef TX_TIMEOUT_WQ
-          /* We are here because a transmission completed, so the
-           * corresponding watchdog can be canceled.
-           */
+              /* We are here because a transmission completed, so the
+              * corresponding watchdog can be canceled.
+              */
 
-          wd_cancel(&priv->txtimeout[i]);
+              wd_cancel(&priv->txtimeout[i]);
 #endif
+            }
         }
     }
 
@@ -1902,7 +1912,9 @@ int stm32_initialize(struct stm32_driver_s *priv)
 
   // Disable Automatic Retransmission of frames upon error
   // NOTE: This will even disable automatic retry due to lost arbitration!!
+#if 0
   modifyreg32(priv->base + STM32_FDCAN_CCCR_OFFSET, 0, FDCAN_CCCR_DAR);
+#endif
 
   // Disable Time Triggered (TT) operation -- TODO (must use TTCAN_TypeDef)
   //ttcan_->TTOCF &= ~FDCAN_TTOCF_OM
@@ -1995,10 +2007,13 @@ int stm32_initialize(struct stm32_driver_s *priv)
   ram_offset += n_extid;
 
   // Set size of each element in the Rx/Tx buffers and FIFOs
+#ifdef CONFIG_NET_CAN_CANFD
+  modifyreg32(priv->base + STM32_FDCAN_RXESC_OFFSET, 0, FDCAN_RXESC_RBDS); // Full 64 byte space for every element (Rx)
+  modifyreg32(priv->base + STM32_FDCAN_TXESC_OFFSET, 0, FDCAN_TXESC_TBDS); // Full 64 byte space for every element (Tx)
+#else
   putreg32(0, priv->base + STM32_FDCAN_RXESC_OFFSET);  // 8 byte space for every element (Rx buffer, FIFO1, FIFO0)
   putreg32(0, priv->base + STM32_FDCAN_TXESC_OFFSET);  // 8 byte space for every element (Tx buffer)
-
-  /// JACOB: TODO: Figure out how to setup all this for CAN FD frames
+#endif
 
   priv->message_ram.n_rxfifo0 = NUM_RX_FIFO0;
   priv->message_ram.n_rxfifo1 = NUM_RX_FIFO1;
@@ -2019,7 +2034,7 @@ int stm32_initialize(struct stm32_driver_s *priv)
 
   /* Assign Tx Mailbox pointer in the driver structure */
 
-  priv->message_ram. txfifo_addr = gl_ram_base + ram_offset * WORD_LENGTH;
+  priv->message_ram.txfifo_addr = gl_ram_base + ram_offset * WORD_LENGTH;
   priv->tx = (struct tx_fifo_s *)(priv->message_ram.txfifo_addr);
 
   // Set Tx FIFO size (32 elements max)
@@ -2037,8 +2052,6 @@ int stm32_initialize(struct stm32_driver_s *priv)
   regval &= ~FDCAN_GFC_ANFS;  // Accept non-matching stdid frames into FIFO0
   regval &= ~FDCAN_GFC_ANFE;  // Accept non-matching extid frames into FIFO0
   putreg32(regval, priv->base + STM32_FDCAN_GFC_OFFSET);
-
-  /* Clear message RAM */
 
   dumpregs(priv);
 
