@@ -133,7 +133,7 @@ static int peak_tx_mbi_ = 0;
  ****************************************************************************/
 
 /* CAN ID word, as defined by FDCAN device (Note xtd/rtr/esi bit positions) */
-union can_id_e
+union can_id_u
 {
   volatile uint32_t can_id;
   struct
@@ -152,7 +152,7 @@ union can_id_e
 };
 
 /* Union of 4 bytes as 1 register */
-union payload_e
+union payload_u
 {
   volatile uint32_t word;
   struct
@@ -167,7 +167,7 @@ union payload_e
 /* Message RAM Structures */
 
 // Rx FIFO Element Header -- RM0433 pg 2536
-union rx_fifo_header_e
+union rx_fifo_header_u
 {
   struct
   {
@@ -178,7 +178,7 @@ union rx_fifo_header_e
   struct
   {
     // First word
-    union can_id_e id;
+    union can_id_u id;
 
     // Second word
     volatile uint32_t rxts : 16; // Rx timestamp
@@ -192,7 +192,7 @@ union rx_fifo_header_e
 };
 
 // Tx FIFO Element Header -- RM0433 pg 2538
-union tx_fifo_header_e
+union tx_fifo_header_u
 {
   struct
   {
@@ -203,7 +203,7 @@ union tx_fifo_header_e
   struct
   {
     // First word
-    union can_id_e id;
+    union can_id_u id;
 
     // Second word
     volatile uint32_t res1 : 16; // Reserved for Tx Event timestamp
@@ -219,22 +219,22 @@ union tx_fifo_header_e
 // Rx FIFO Element
 struct rx_fifo_s
 {
-  union rx_fifo_header_e header;
+  union rx_fifo_header_u header;
 #ifdef CONFIG_NET_CAN_CANFD
-  union payload_e data[16]; // 64-byte FD payload
+  union payload_u data[16]; // 64-byte FD payload
 #else
-  union payload_e data[2];  // 8-byte Classic payload
+  union payload_u data[2];  // 8-byte Classic payload
 #endif
 };
 
 // Tx FIFO Element
 struct tx_fifo_s
 {
-  union tx_fifo_header_e header;
+  union tx_fifo_header_u header;
 #ifdef CONFIG_NET_CAN_CANFD
-  union payload_e data[16]; // 64-byte FD payload
+  union payload_u data[16]; // 64-byte FD payload
 #else
-  union payload_e data[2];  // 8-byte Classic payload
+  union payload_u data[2];  // 8-byte Classic payload
 #endif
 };
 
@@ -775,7 +775,7 @@ static int stm32_transmit(FAR struct stm32_driver_s *priv)
   /* For statistics purposes, keep track of highest waterline in TX mailbox */
   peak_tx_mbi_ = (peak_tx_mbi_ > mbi ? peak_tx_mbi_ : mbi);
 
-  union tx_fifo_header_e header;
+  union tx_fifo_header_u header;
 
   if (priv->dev.d_len == sizeof(struct can_frame))
     {
