@@ -424,7 +424,7 @@ static uint16_t can_recvfrom_eventhandler(FAR struct net_driver_s *dev,
           /* If a new packet is available, check receive filters
            * when is valid then complete the read action.
            */
-#if defined(CONFIG_NET_CANPROTO_OPTIONS) && defined(CONFIG_NET_CAN_CANFD)
+#if defined(CONFIG_NET_CANPROTO_OPTIONS)
           if (can_recv_filter(conn, (canid_t) *dev->d_appdata) == 0)
             {
               flags &= ~CAN_NEWDATA;
