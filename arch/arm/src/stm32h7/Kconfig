@@ -1895,7 +1895,7 @@ config STM32H7_DMACAPABLE_ASSUME_CACHE_ALIGNED
 		This option configures the stm32_dmacapable to not disqualify
 		DMA operations on memory that is not dcache aligned based solely
 		on the starting address and byte count.
-		
+
 		Use this when ALL buffer extents are known to be aligned, but the
 		the count does not use the complete buffer.
 
@@ -5413,7 +5413,7 @@ config FDCAN2_DATA_BITRATE
 
 endmenu # STM32H7_FDCAN2
 
-config CONFIG_STM32H7_FDCAN_REGDEBUG
+config STM32H7_FDCAN_REGDEBUG
 	bool "Enable register dump debugging"
 	depends on DEBUG_CAN_INFO
 	depends on DEBUG_NET_INFO
