@@ -1,5 +1,5 @@
 /****************************************************************************
- * arch/arm/src/stm32h7/stm32_fdcan.c
+ * arch/arm/src/stm32h7/stm32_fdcan_sock.c
  *
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
@@ -42,15 +42,15 @@
 #include <nuttx/net/netdev.h>
 #include <nuttx/net/can.h>
 
+#ifdef CONFIG_NET_CAN_RAW_TX_DEADLINE
+#include <sys/time.h>
+#endif
+
 #include <arch/board/board.h>
 
 #include "arm_internal.h"
 #include "chip.h"
 #include "stm32.h"
-
-#ifdef CONFIG_NET_CAN_RAW_TX_DEADLINE
-#include <sys/time.h>
-#endif
 
 /****************************************************************************
  * Pre-processor Definitions

@@ -108,7 +108,7 @@ CHIP_CSRCS += stm32_adc.c
 endif
 
 ifeq ($(CONFIG_STM32H7_FDCAN),y)
-CHIP_CSRCS += stm32_fdcan.c
+CHIP_CSRCS += stm32_fdcan_sock.c
 endif
 
 ifeq ($(CONFIG_STM32H7_BBSRAM),y)
