@@ -5427,6 +5427,8 @@ config STM32H7_FDCAN_LOOPBACK
 	default n
 	---help---
 		Enable the FDCAN local loopback mode for testing purposes.
+		Requires a further choice of internal or external loopback mode.
+
 		TODO: Enable separately for FDCAN1 and FDCAN2
 
 choice

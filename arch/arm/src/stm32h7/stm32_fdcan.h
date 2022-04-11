@@ -92,7 +92,7 @@ void arm_netinitialize(void);
 #else
 
 /****************************************************************************
- * Function: stm32_caninitialize
+ * Function: stm32_fdcansockinitialize
  *
  * Description:
  *   Initialize the CAN controller and driver
@@ -108,7 +108,7 @@ void arm_netinitialize(void);
  *
  ****************************************************************************/
 
-int stm32_caninitialize(int intf);
+int stm32_fdcansockinitialize(int intf);
 
 #endif
 

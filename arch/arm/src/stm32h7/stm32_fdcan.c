@@ -86,8 +86,7 @@
 /* Define number of Rx / Tx elements in message RAM; note that elements are
  * given sizes in number of words (4-byte chunks)
  *
- * Up to 64 Rx elements may be configured per FIFO (2 FIFOs per interface),
- * Up to 32 Tx elements may be configured per interface
+ * Up to 64 Rx elements and 32 Tx elements may be configured per interface
  *
  * Note there are a total of 2560 words available shared between all FDCAN
  * interfaces for Rx, Tx, and filter storage
@@ -115,6 +114,12 @@
 #define MSG_DATA            0
 #endif
 
+#ifdef CONFIG_NET_CAN_CANFD
+#  define FRAME_TYPE struct canfd_frame
+#else
+#  define FRAME_TYPE struct can_frame
+#endif
+
 /* CAN Clock Configuration **************************************************/
 
 #define STM32_FDCANCLK      STM32_HSE_FREQUENCY
@@ -130,6 +135,7 @@
  ****************************************************************************/
 
 /* CAN ID word, as defined by FDCAN device (Note xtd/rtr/esi bit positions) */
+
 union can_id_u
 {
   volatile uint32_t can_id;
@@ -149,6 +155,7 @@ union can_id_u
 };
 
 /* Union of 4 bytes as 1 register */
+
 union payload_u
 {
   volatile uint32_t word;
@@ -164,6 +171,7 @@ union payload_u
 /* Message RAM Structures ***************************************************/
 
 /* Rx FIFO Element Header -- RM0433 pg 2536 */
+
 union rx_fifo_header_u
 {
   struct
@@ -175,9 +183,11 @@ union rx_fifo_header_u
   struct
   {
     /* First word */
+
     union can_id_u id;
 
     /* Second word */
+
     volatile uint32_t rxts : 16; /* Rx timestamp */
     volatile uint32_t dlc  : 4;  /* Data length code */
     volatile uint32_t brs  : 1;  /* Bitrate switching */
@@ -189,6 +199,7 @@ union rx_fifo_header_u
 };
 
 /* Tx FIFO Element Header -- RM0433 pg 2538 */
+
 union tx_fifo_header_u
 {
   struct
@@ -200,9 +211,11 @@ union tx_fifo_header_u
   struct
   {
     /* First word */
+
     union can_id_u id;
 
     /* Second word */
+
     volatile uint32_t res1 : 16; /* Reserved for Tx Event timestamp */
     volatile uint32_t dlc  : 4;  /* Data length code */
     volatile uint32_t brs  : 1;  /* Bitrate switching */
@@ -214,6 +227,7 @@ union tx_fifo_header_u
 };
 
 /* Rx FIFO Element */
+
 struct rx_fifo_s
 {
   union rx_fifo_header_u header;
@@ -225,6 +239,7 @@ struct rx_fifo_s
 };
 
 /* Tx FIFO Element */
+
 struct tx_fifo_s
 {
   union tx_fifo_header_u header;
@@ -301,7 +316,7 @@ static const struct fdcan_config_s stm32_fdcan0_config =
 static const struct fdcan_config_s stm32_fdcan1_config =
 {
   .tx_pin      = GPIO_CAN2_TX,
-  .rx_pin      = GPIO_CAN1_RX,
+  .rx_pin      = GPIO_CAN2_RX,
   .mb_irq      =
   {
     STM32_IRQ_FDCAN2_0,
@@ -310,42 +325,49 @@ static const struct fdcan_config_s stm32_fdcan1_config =
 };
 #endif
 
-/* The stm32_driver_s encapsulates all state information for a single
+#ifdef CONFIG_STM32H7_FDCAN3
+#  error "FDCAN3 support not yet added to stm32h7x3xx header files (pinmap, irq, etc.)"
+static const struct fdcan_config_s stm32_fdcan2_config =
+{
+  .tx_pin      = GPIO_CAN3_TX,
+  .rx_pin      = GPIO_CAN3_RX,
+  .mb_irq      =
+  {
+    STM32_IRQ_FDCAN3_0,
+    STM32_IRQ_FDCAN3_1 ,
+  },
+};
+#endif
+
+
+/* The fdcan_driver_s encapsulates all state information for a single
  * hardware interface
  */
 
-struct stm32_driver_s
+struct fdcan_driver_s
 {
   const struct fdcan_config_s *config;  /* Pin config */
   uint8_t iface_idx;                    /* FDCAN interface index (0 or 1) */
   uint32_t base;                        /* FDCAN base address */
-
-  struct fdcan_message_ram message_ram; /* Start addresses for each reagion of Message RAM */
 
   struct fdcan_bitseg arbi_timing;      /* Timing for arbitration phase */
 #ifdef CONFIG_NET_CAN_CANFD
   struct fdcan_bitseg data_timing;      /* Timing for data phase */
 #endif
 
-  /* Pointers to the Rx and Tx FIFO storage in Message RAM */
-
-  struct rx_fifo_s *rx;
-  struct tx_fifo_s *tx;
+  struct fdcan_message_ram message_ram; /* Start addresses for each reagion of Message RAM */
+  struct rx_fifo_s *rx;                 /* Pointer to Rx FIFO0 in Message RAM */
+  struct tx_fifo_s *tx;                 /* Pointer to Tx mailboxes in Message RAM */
 
   /* Work queue configs for deferring interrupt and poll work */
 
   struct work_s irqwork;
   struct work_s pollwork;
 
-  /* Pointers to Tx / Rx descriptors for intermediate storage of frames */
+  /* Intermediate storage of Tx / Rx frames outside of Message RAM */
 
-#ifdef CONFIG_NET_CAN_CANFD
-  struct canfd_frame *txdesc;
-  struct canfd_frame *rxdesc;
-#else
-  struct can_frame *txdesc;
-  struct can_frame *rxdesc;
-#endif
+  uint8_t tx_pool[(sizeof(FRAME_TYPE)+MSG_DATA)*POOL_SIZE];
+  uint8_t rx_pool[(sizeof(FRAME_TYPE)+MSG_DATA)*POOL_SIZE];
 
   struct net_driver_s dev;              /* Interface understood by the network */
   bool bifup;                           /* true:ifup false:ifdown */
@@ -358,23 +380,83 @@ struct stm32_driver_s
  ****************************************************************************/
 
 #ifdef CONFIG_STM32H7_FDCAN1
-static struct stm32_driver_s g_fdcan0;
+static struct fdcan_driver_s g_fdcan0;
 #endif
 
 #ifdef CONFIG_STM32H7_FDCAN2
-static struct stm32_driver_s g_fdcan1;
+static struct fdcan_driver_s g_fdcan1;
 #endif
 
-#ifdef CONFIG_NET_CAN_CANFD
-static uint8_t g_tx_pool[(sizeof(struct canfd_frame)+MSG_DATA)*POOL_SIZE];
-static uint8_t g_rx_pool[(sizeof(struct canfd_frame)+MSG_DATA)*POOL_SIZE];
-#else
-static uint8_t g_tx_pool[sizeof(struct can_frame)*POOL_SIZE];
-static uint8_t g_rx_pool[sizeof(struct can_frame)*POOL_SIZE];
+#ifdef CONFIG_STM32H7_FDCAN3
+static struct fdcan_driver_s g_fdcan2;
 #endif
 
 /****************************************************************************
  * Private Function Prototypes
+ ****************************************************************************/
+
+/* Common TX logic */
+
+static bool fdcan_txringfull(FAR struct fdcan_driver_s *priv);
+static int  fdcan_transmit(FAR struct fdcan_driver_s *priv);
+static int  fdcan_txpoll(struct net_driver_s *dev);
+
+/* Helper functions */
+
+#ifdef CONFIG_STM32H7_FDCAN_REGDEBUG
+static void fdcan_dumpregs(FAR struct fdcan_driver_s *priv);
+#endif
+
+int32_t fdcan_bittiming(struct fdcan_bitseg *timing);
+
+static void fdcan_apb1hreset(void);
+static void fdcan_setinit(uint32_t base, uint32_t init);
+static void fdcan_setenable(uint32_t base, uint32_t enable);
+static void fdcan_setconfig(uint32_t base, uint32_t config_enable);
+static uint32_t fdcan_waitccr_change(uint32_t base,
+                                     uint32_t mask,
+                                     uint32_t target_state);
+
+static void fdcan_enable_interrupts(struct fdcan_driver_s *priv);
+static void fdcan_disable_interrupts(struct fdcan_driver_s *priv);
+
+/* Interrupt handling */
+
+static void fdcan_receive(FAR struct fdcan_driver_s *priv);
+static void fdcan_txdone(FAR struct fdcan_driver_s *priv);
+
+static int  fdcan_interrupt(int irq, FAR void *context,
+                            FAR void *arg);
+
+static void fdcan_check_errors_isr(FAR struct fdcan_driver_s *priv);
+
+/* Watchdog timer expirations */
+
+#ifdef TX_TIMEOUT_WQ
+static void fdcan_txtimeout_work(FAR void *arg);
+static void fdcan_txtimeout_expiry(wdparm_t arg);
+#endif
+
+/* NuttX networking stack callback functions */
+
+static int fdcan_ifup(struct net_driver_s *dev);
+static int fdcan_ifdown(struct net_driver_s *dev);
+
+static void fdcan_txavail_work(FAR void *arg);
+static int  fdcan_txavail(struct net_driver_s *dev);
+
+#ifdef CONFIG_NETDEV_IOCTL
+static int  fdcan_netdev_ioctl(struct net_driver_s *dev, int cmd,
+                               unsigned long arg);
+#endif
+
+/* Initialization and Reset */
+
+static int  fdcan_initialize(struct fdcan_driver_s *priv);
+static void fdcan_reset(struct fdcan_driver_s *priv);
+
+/****************************************************************************
+ * Private Functions
  ****************************************************************************/
 
 /****************************************************************************
@@ -384,7 +466,7 @@ static uint8_t g_rx_pool[sizeof(struct can_frame)*POOL_SIZE];
  ****************************************************************************/
 
 #ifdef CONFIG_STM32H7_FDCAN_REGDEBUG
-static void fdcan_dumpregs(FAR struct stm32_driver_s *priv)
+static void fdcan_dumpregs(FAR struct fdcan_driver_s *priv)
 {
   printf("-------------- FDCAN Reg Dump ----------------\n");
   printf("CAN%d Base: 0x%lx\n", priv->iface_idx, priv->base);
@@ -425,18 +507,17 @@ static void fdcan_dumpregs(FAR struct stm32_driver_s *priv)
  * Name: fdcan_bittiming
  *
  * Description:
- *   Convert desired bitrate to bit segment values
+ *   Convert desired bitrate to FDCAN bit segment values
+ *   The computed values apply to both data and arbitration phases
  *
  * Input Parameters:
  *   timing - structure to store bit timing
- *   can_fd - if set to true calculate CAN FD data-segment bit timings,
- *            otherwise calculate classical can timings
  *
  * Returned Value:
  *   OK on success; >0 on failure.
  ****************************************************************************/
 
-int32_t fdcan_bittiming(struct fdcan_bitseg *timing, bool can_fd)
+int32_t fdcan_bittiming(struct fdcan_bitseg *timing)
 {
   /* Implementation ported from PX4's uavcan_drivers/stm32[h7]
    *
@@ -550,64 +631,6 @@ int32_t fdcan_bittiming(struct fdcan_bitseg *timing, bool can_fd)
   return 0;
 }
 
-/* Common TX logic */
-
-static bool fdcan_txringfull(FAR struct stm32_driver_s *priv);
-static int  fdcan_transmit(FAR struct stm32_driver_s *priv);
-static int  fdcan_txpoll(struct net_driver_s *dev);
-
-/* Helper functions */
-
-static void fdcan_apb1hreset(void);
-static void fdcan_setinit(uint32_t base, uint32_t init);
-static void fdcan_setenable(uint32_t base, uint32_t enable);
-static void fdcan_setconfig(uint32_t base, uint32_t config_enable);
-static uint32_t fdcan_waitccr_change(uint32_t base,
-                                       uint32_t mask,
-                                       uint32_t target_state);
-
-static void fdcan_enable_interrupts(struct stm32_driver_s *priv);
-static void fdcan_disable_interrupts(struct stm32_driver_s *priv);
-
-/* Interrupt handling */
-
-static void fdcan_receive(FAR struct stm32_driver_s *priv);
-static void fdcan_txdone(FAR struct stm32_driver_s *priv);
-
-static int  fdcan_interrupt(int irq, FAR void *context,
-                                      FAR void *arg);
-
-static void fdcan_check_errors_isr(FAR struct stm32_driver_s *priv);
-
-/* Watchdog timer expirations */
-
-#ifdef TX_TIMEOUT_WQ
-static void fdcan_txtimeout_work(FAR void *arg);
-static void fdcan_txtimeout_expiry(wdparm_t arg);
-#endif
-
-/* NuttX networking stack callback functions */
-
-static int  fdcan_ifup(struct net_driver_s *dev);
-static int  fdcan_ifdown(struct net_driver_s *dev);
-
-static void fdcan_txavail_work(FAR void *arg);
-static int  fdcan_txavail(struct net_driver_s *dev);
-
-#ifdef CONFIG_NETDEV_IOCTL
-static int  fdcan_netdev_ioctl(struct net_driver_s *dev, int cmd,
-                               unsigned long arg);
-#endif
-
-/* Initialization */
-
-static int  fdcan_hw_initialize(struct stm32_driver_s *priv);
-static void fdcan_reset(struct stm32_driver_s *priv);
-
-/****************************************************************************
- * Private Functions
- ****************************************************************************/
-
 /****************************************************************************
  * Function: fdcan_txringfull
  *
@@ -623,7 +646,7 @@ static void fdcan_reset(struct stm32_driver_s *priv);
  *
  ****************************************************************************/
 
-static bool fdcan_txringfull(FAR struct stm32_driver_s *priv)
+static bool fdcan_txringfull(FAR struct fdcan_driver_s *priv)
 {
   /* JACOB TODO: Decide if this needs to be checked every time, or just during init
    * Check that we even _have_ a Tx FIFO allocated
@@ -665,7 +688,7 @@ static bool fdcan_txringfull(FAR struct stm32_driver_s *priv)
  *
  ****************************************************************************/
 
-static int fdcan_transmit(FAR struct stm32_driver_s *priv)
+static int fdcan_transmit(FAR struct fdcan_driver_s *priv)
 {
   irqstate_t flags = enter_critical_section();
 
@@ -762,6 +785,7 @@ static int fdcan_transmit(FAR struct stm32_driver_s *priv)
       header.mm = mbi; /* Mailbox Marker for our own use; just store FIFO index */
 
       /* Store into message RAM */
+
       mb->header.w0 = header.w0;
       mb->header.w1 = header.w1;
       mb->data[0].word = *(uint32_t *)&frame->data[0];
@@ -859,8 +883,8 @@ static int fdcan_transmit(FAR struct stm32_driver_s *priv)
 
 static int fdcan_txpoll(struct net_driver_s *dev)
 {
-  FAR struct stm32_driver_s *priv =
-    (FAR struct stm32_driver_s *)dev->d_private;
+  FAR struct fdcan_driver_s *priv =
+    (FAR struct fdcan_driver_s *)dev->d_private;
 
   /* If the polling resulted in data that should be sent out on the network,
    * the field d_len is set to a value > 0.
@@ -909,7 +933,7 @@ static int fdcan_txpoll(struct net_driver_s *dev)
  *
  ****************************************************************************/
 
-static void fdcan_receive(FAR struct stm32_driver_s *priv)
+static void fdcan_receive(FAR struct fdcan_driver_s *priv)
 {
   uint32_t regval = getreg32(priv->base + STM32_FDCAN_IR_OFFSET);
 
@@ -990,7 +1014,7 @@ static void fdcan_receive(FAR struct stm32_driver_s *priv)
 #ifdef CONFIG_NET_CAN_CANFD
       if (rf->header.fdf) /* CAN FD frame */
         {
-          struct canfd_frame *frame = (struct canfd_frame *)priv->rxdesc;
+          struct canfd_frame *frame = (struct canfd_frame *)priv->rx_pool;
 
           if (rf->header.id.xtd)
             {
@@ -1030,7 +1054,7 @@ static void fdcan_receive(FAR struct stm32_driver_s *priv)
       else /* CAN 2.0 Frame */
 #endif
         {
-          struct can_frame *frame = (struct can_frame *)priv->rxdesc;
+          struct can_frame *frame = (struct can_frame *)priv->rx_pool;
 
           if (rf->header.id.xtd)
             {
@@ -1080,7 +1104,7 @@ static void fdcan_receive(FAR struct stm32_driver_s *priv)
        * queue is not full.
        */
 
-      priv->dev.d_buf = (uint8_t *)priv->txdesc;
+      priv->dev.d_buf = priv->tx_pool;
     }
 
   /* update_event_.signalFromInterrupt(); */
@@ -1106,7 +1130,7 @@ static void fdcan_receive(FAR struct stm32_driver_s *priv)
  *
  ****************************************************************************/
 
-static void fdcan_txdone(FAR struct stm32_driver_s *priv)
+static void fdcan_txdone(FAR struct fdcan_driver_s *priv)
 {
   uint32_t IR = getreg32(priv->base + STM32_FDCAN_IR_OFFSET);
   if (IR & FDCAN_IR_TC)
@@ -1211,6 +1235,16 @@ static int fdcan_interrupt(int irq, FAR void *context,
         break;
 #endif
 
+#ifdef CONFIG_STM32H7_FDCAN3
+      case STM32_IRQ_FDCAN3_0:
+        fdcan_receive(&g_fdcan2);
+        break;
+
+      case STM32_IRQ_FDCAN3_1:
+        fdcan_txdone(&g_fdcan2);
+        break;
+#endif
+
       default:
         nerr("Unexpected IRQ [%d]\n", irq);
         return -1;
@@ -1232,7 +1266,7 @@ static int fdcan_interrupt(int irq, FAR void *context,
  *  Called from interrupt context
  ****************************************************************************/
 
-static void fdcan_check_errors_isr(FAR struct stm32_driver_s *priv)
+static void fdcan_check_errors_isr(FAR struct fdcan_driver_s *priv)
 {
   /* Read CAN Error Logging counter (This also resets the error counter) */
   uint32_t regval = getreg32(priv->base + STM32_FDCAN_ECR_OFFSET) & FDCAN_ECR_CEL;
@@ -1287,7 +1321,7 @@ static void fdcan_check_errors_isr(FAR struct stm32_driver_s *priv)
 
 static void fdcan_txtimeout_work(FAR void *arg)
 {
-  FAR struct stm32_driver_s *priv = (FAR struct stm32_driver_s *)arg;
+  FAR struct fdcan_driver_s *priv = (FAR struct fdcan_driver_s *)arg;
 
   struct timespec ts;
   struct timeval *now = (struct timeval *)&ts;
@@ -1333,7 +1367,7 @@ static void fdcan_txtimeout_work(FAR void *arg)
 
 static void fdcan_txtimeout_expiry(wdparm_t arg)
 {
-  FAR struct stm32_driver_s *priv = (FAR struct stm32_driver_s *)arg;
+  FAR struct fdcan_driver_s *priv = (FAR struct fdcan_driver_s *)arg;
 
   /* Schedule to perform the TX timeout processing on the worker thread */
 
@@ -1424,7 +1458,7 @@ static uint32_t fdcan_waitccr_change(uint32_t base, uint32_t mask,
 }
 
 /* Enable all interrupts used by this driver */
-static void fdcan_enable_interrupts(struct stm32_driver_s *priv)
+static void fdcan_enable_interrupts(struct fdcan_driver_s *priv)
 {
   /* Enable both interrupt lines at the device level */
   modifyreg32(priv->base + STM32_FDCAN_ILE_OFFSET, 0, FDCAN_ILE_EINT0 | FDCAN_ILE_EINT1);
@@ -1435,7 +1469,7 @@ static void fdcan_enable_interrupts(struct stm32_driver_s *priv)
 }
 
 /* Disable all interrupts used by this driver */
-static void fdcan_disable_interrupts(struct stm32_driver_s *priv)
+static void fdcan_disable_interrupts(struct fdcan_driver_s *priv)
 {
   /* Disable both lines at the NVIC (Nested Vector Interrupt Controller) level */
   up_disable_irq(priv->config->mb_irq[0]);
@@ -1464,20 +1498,14 @@ static void fdcan_disable_interrupts(struct stm32_driver_s *priv)
 
 static int fdcan_ifup(struct net_driver_s *dev)
 {
-  FAR struct stm32_driver_s *priv =
-    (FAR struct stm32_driver_s *)dev->d_private;
+  FAR struct fdcan_driver_s *priv =
+    (FAR struct fdcan_driver_s *)dev->d_private;
 
-  /* Wake up the device and enter config mode */
+  /* Wake up the device and perform all initialization */
 
   irqstate_t flags = enter_critical_section();
 
-#ifdef CONFIG_STM32H7_FDCAN_REGDEBUG
-  fdcan_dumpregs(priv);
-#endif
-
-  fdcan_setenable(priv->base, 1);
-  fdcan_setinit(priv->base, 1);
-  fdcan_setconfig(priv->base, 1);
+  fdcan_initialize(priv);
 
   /* Enable interrupts (at both device and NVIC level) */
 
@@ -1516,8 +1544,8 @@ static int fdcan_ifup(struct net_driver_s *dev)
 
 static int fdcan_ifdown(struct net_driver_s *dev)
 {
-  FAR struct stm32_driver_s *priv =
-    (FAR struct stm32_driver_s *)dev->d_private;
+  FAR struct fdcan_driver_s *priv =
+    (FAR struct fdcan_driver_s *)dev->d_private;
 
   fdcan_reset(priv);
 
@@ -1545,7 +1573,7 @@ static int fdcan_ifdown(struct net_driver_s *dev)
 
 static void fdcan_txavail_work(FAR void *arg)
 {
-  FAR struct stm32_driver_s *priv = (FAR struct stm32_driver_s *)arg;
+  FAR struct fdcan_driver_s *priv = (FAR struct fdcan_driver_s *)arg;
 
   /* Ignore the notification if the interface is not yet up */
 
@@ -1590,8 +1618,8 @@ static void fdcan_txavail_work(FAR void *arg)
 
 static int fdcan_txavail(struct net_driver_s *dev)
 {
-  FAR struct stm32_driver_s *priv =
-    (FAR struct stm32_driver_s *)dev->d_private;
+  FAR struct fdcan_driver_s *priv =
+    (FAR struct fdcan_driver_s *)dev->d_private;
 
   /* Is our single work structure available?  It may not be if there are
    * pending interrupt actions and we will have to ignore the Tx
@@ -1630,7 +1658,7 @@ static int fdcan_txavail(struct net_driver_s *dev)
 static int fdcan_netdev_ioctl(struct net_driver_s *dev, int cmd,
                        unsigned long arg)
 {
-  FAR struct stm32_driver_s *priv = dev->d_private;
+  FAR struct fdcan_driver_s *priv = dev->d_private;
 
   int ret;
 
@@ -1663,7 +1691,7 @@ static int fdcan_netdev_ioctl(struct net_driver_s *dev, int cmd,
 
           /* Reset CAN controller and start with new timings */
 
-          ret = fdcan_hw_initialize(priv);
+          ret = fdcan_initialize(priv);
 
           if (ret == OK)
             {
@@ -1717,13 +1745,13 @@ static int fdcan_netdev_ioctl(struct net_driver_s *dev, int cmd,
 #endif /* CONFIG_NETDEV_IOCTL */
 
 /****************************************************************************
- * Function: fdcan_hw_initialize
+ * Function: fdcan_initialize
  *
  * Description:
  *   Initialize FDCAN device
  *
  * Input Parameters:
- *   priv - Reference to the private FDCAN driver state structure
+ *   priv - Pointer to the private FDCAN driver state structure
  *
  * Returned Value:
  *   OK on success; Negated errno on failure.
@@ -1732,7 +1760,7 @@ static int fdcan_netdev_ioctl(struct net_driver_s *dev, int cmd,
  *
  ****************************************************************************/
 
-int fdcan_hw_initialize(struct stm32_driver_s *priv)
+int fdcan_initialize(struct fdcan_driver_s *priv)
 {
   uint32_t regval;
 
@@ -1767,7 +1795,7 @@ int fdcan_hw_initialize(struct stm32_driver_s *priv)
 
   /* Nominal / arbitration phase bitrate */
 
-  if (fdcan_bittiming(&priv->arbi_timing, false) != OK)
+  if (fdcan_bittiming(&priv->arbi_timing) != OK)
     {
       fdcan_setinit(priv->base, 0);
       leave_critical_section(flags);
@@ -1792,7 +1820,7 @@ int fdcan_hw_initialize(struct stm32_driver_s *priv)
 #ifdef CONFIG_NET_CAN_CANFD
   /* CAN-FD Data phase bitrate */
 
-  if (fdcan_bittiming(&priv->data_timing, true) != OK)
+  if (fdcan_bittiming(&priv->data_timing) != OK)
     {
       fdcan_setinit(priv->base, 0);
       leave_critical_section(flags);
@@ -1831,35 +1859,37 @@ int fdcan_hw_initialize(struct stm32_driver_s *priv)
 #endif
 
 #ifdef CONFIG_NET_CAN_CANFD
-  /* Enable CAN-FD communication */
+  /* Enable CAN-FD frames, including bitrate switching if needed */
+
   modifyreg32(priv->base + STM32_FDCAN_CCCR_OFFSET, 0, FDCAN_CCCR_FDOE);
   if (priv->arbi_timing.bitrate != priv->data_timing.bitrate)
     {
-      /* Enable bitrate switching if requested via config */
       modifyreg32(priv->base + STM32_FDCAN_CCCR_OFFSET, 0, FDCAN_CCCR_BRSE);
     }
 #else
   /* Disable CAN-FD communications ("classic" CAN only) */
+
   modifyreg32(priv->base + STM32_FDCAN_CCCR_OFFSET, FDCAN_CCCR_FDOE, 0);
 #endif
 
+#if 0
   /* Disable Automatic Retransmission of frames upon error
    * NOTE: This will even disable automatic retry due to lost arbitration!!
    */
-#if 0
+
   modifyreg32(priv->base + STM32_FDCAN_CCCR_OFFSET, 0, FDCAN_CCCR_DAR);
 #endif
 
-  /*
-   * Configure Interrupts
-   */
+  /* Configure Interrupts */
 
   /* Clear all interrupt flags
    * Note: A flag is cleared by writing a 1 to the corresponding bit position
    */
+
   putreg32(FDCAN_IR_MASK, priv->base + STM32_FDCAN_IR_OFFSET);
 
   /* Enable relevant interrupts */
+
   regval = FDCAN_IE_TCE     /* Transmit Complete */
          | FDCAN_IE_RF0NE   /* Rx FIFO 0 new message */
          | FDCAN_IE_RF0FE   /* Rx FIFO 0 FIFO full */
@@ -1870,16 +1900,16 @@ int fdcan_hw_initialize(struct stm32_driver_s *priv)
   /* Keep Rx interrupts on Line 0; move Tx to Line 1
    * TC (Tx Complete) interrupt on line 1
    */
+
   regval = getreg32(priv->base + STM32_FDCAN_ILS_OFFSET);
   regval |= FDCAN_ILS_TCL;
   putreg32(FDCAN_ILS_TCL, priv->base + STM32_FDCAN_ILS_OFFSET);
 
-  /* Enable Tx buffer transmission interrupts */
-  putreg32(FDCAN_TXBTIE_TIE, priv->base + STM32_FDCAN_TXBTIE_OFFSET);
-
-  /* Note: You must still call fdcan_enable_interrupts() to set ILE
-   * (interrupt line enable)
+  /* Enable Tx buffer transmission interrupts
+   * Note: Still need fdcan_enable_interrupts() to set ILE (IR line enable)
    */
+
+  putreg32(FDCAN_TXBTIE_TIE, priv->base + STM32_FDCAN_TXBTIE_OFFSET);
 
   /*
    * Configure Message RAM
@@ -1937,6 +1967,7 @@ int fdcan_hw_initialize(struct stm32_driver_s *priv)
 
 #ifdef CONFIG_NET_CAN_CANFD
   /* Set full 64 byte space for every Rx/Tx FIFO element */
+
   modifyreg32(priv->base + STM32_FDCAN_RXESC_OFFSET, 0, FDCAN_RXESC_RBDS); /* Rx Buffer */
   modifyreg32(priv->base + STM32_FDCAN_RXESC_OFFSET, 0, FDCAN_RXESC_F0DS); /* Rx FIFO 0 */
   modifyreg32(priv->base + STM32_FDCAN_RXESC_OFFSET, 0, FDCAN_RXESC_F1DS); /* Rx FIFO 1 */
@@ -1976,9 +2007,8 @@ int fdcan_hw_initialize(struct stm32_driver_s *priv)
   regval |= (ram_offset << FDCAN_TXBC_TBSA_SHIFT) & FDCAN_TXBC_TBSA_MASK;
   putreg32(regval, priv->base + STM32_FDCAN_TXBC_OFFSET);
 
-  /* Default filter configuration
-   * Accept all messages into Rx FIFO0 by default
-   */
+  /* Default filter configuration - Accept all messages into Rx FIFO0 */
+
   regval = getreg32(priv->base + STM32_FDCAN_GFC_OFFSET);
   regval &= ~FDCAN_GFC_ANFS;  /* Accept non-matching stdid frames into FIFO0 */
   regval &= ~FDCAN_GFC_ANFE;  /* Accept non-matching extid frames into FIFO0 */
@@ -1988,9 +2018,8 @@ int fdcan_hw_initialize(struct stm32_driver_s *priv)
   fdcan_dumpregs(priv);
 #endif
 
-  /*
-   * Exit Initialization mode
-   */
+  /* Exit Initialization mode */
+
   fdcan_setinit(priv->base, 0);
 
 #ifdef CONFIG_STM32H7_FDCAN_REGDEBUG
@@ -2009,7 +2038,7 @@ int fdcan_hw_initialize(struct stm32_driver_s *priv)
  *   Put the device in the non-operational, reset state
  *
  * Input Parameters:
- *   priv - Reference to the private FDCAN driver state structure
+ *   priv - Pointer to the private FDCAN driver state structure
  *
  * Returned Value:
  *   None
@@ -2018,7 +2047,7 @@ int fdcan_hw_initialize(struct stm32_driver_s *priv)
  *   The device has previously been initialized, including message RAM
  ****************************************************************************/
 
-static void fdcan_reset(struct stm32_driver_s *priv)
+static void fdcan_reset(struct fdcan_driver_s *priv)
 {
   /* Request Init Mode */
 
@@ -2031,22 +2060,13 @@ static void fdcan_reset(struct stm32_driver_s *priv)
 
   fdcan_setconfig(priv->base, 1);
 
-  /* Disable Interrupts */
+  /* Disable interrupts and clear all interrupt flags*/
 
   fdcan_disable_interrupts(priv);
 
-  /* Clear all interrupt flags (a flag is cleared by writing a 1 to it) */
-
   putreg32(FDCAN_IR_MASK, priv->base + STM32_FDCAN_IR_OFFSET);
 
-  /* Reset all message RAM mailboxes; RX and TX */
-
-  if (priv->rx == NULL || priv->tx == NULL)
-    {
-      nerr("reset requies prior initialization\n");
-      leave_critical_section(flags);
-      return;
-    }
+  /* Clear all message RAM mailboxes if initialized */
 
 #ifdef CONFIG_NET_CAN_CANFD
   const uint8_t n_data_words = 16;
@@ -2054,36 +2074,42 @@ static void fdcan_reset(struct stm32_driver_s *priv)
   const uint8_t n_data_words = 2;
 #endif
 
-  for (uint32_t i = 0; i < NUM_RX_FIFO0; i++)
+  if (priv->rx)
     {
-#ifdef CONFIG_STM32H7_FDCAN_REGDEBUG
-      ninfo("[fdcan] MB RX %i %p\r\n", i, &priv->rx[i]);
-#endif
-      priv->rx[i].header.w1 = 0x0;
-      priv->rx[i].header.w0 = 0x0;
-      for (uint8_t j = 0; j < n_data_words; j++)
-      {
-        priv->rx[i].data[j].word = 0x0;
-      }
+      for (uint32_t i = 0; i < NUM_RX_FIFO0; i++)
+        {
+    #ifdef CONFIG_STM32H7_FDCAN_REGDEBUG
+          ninfo("[fdcan] MB RX %i %p\r\n", i, &priv->rx[i]);
+    #endif
+          priv->rx[i].header.w1 = 0x0;
+          priv->rx[i].header.w0 = 0x0;
+          for (uint8_t j = 0; j < n_data_words; j++)
+            {
+              priv->rx[i].data[j].word = 0x0;
+            }
+        }
     }
 
-  for (uint32_t i = 0; i < NUM_TX_FIFO; i++)
+  if (priv->tx)
     {
-#ifdef CONFIG_STM32H7_FDCAN_REGDEBUG
-      ninfo("[fdcan] MB TX %i %p\r\n", i, &priv->tx[i]);
-#endif
-      priv->tx[i].header.w1 = 0x0;
-      priv->tx[i].header.w0 = 0x0;
-      for (uint8_t j = 0; j < n_data_words; j++)
-      {
-        priv->tx[i].data[j].word = 0x0;
-      }
+      for (uint32_t i = 0; i < NUM_TX_FIFO; i++)
+        {
+    #ifdef CONFIG_STM32H7_FDCAN_REGDEBUG
+          ninfo("[fdcan] MB TX %i %p\r\n", i, &priv->tx[i]);
+    #endif
+          priv->tx[i].header.w1 = 0x0;
+          priv->tx[i].header.w0 = 0x0;
+          for (uint8_t j = 0; j < n_data_words; j++)
+            {
+              priv->tx[i].data[j].word = 0x0;
+            }
+        }
     }
 
   /* Power off the device -- See RM0433 pg 2493 */
 
   fdcan_setinit(priv->base, 0);
-  /* fdcan_setenable(priv->base, 0); /// TODO: Does this reset our config? */
+  fdcan_setenable(priv->base, 0);
 
   leave_critical_section(flags);
 }
@@ -2093,14 +2119,14 @@ static void fdcan_reset(struct stm32_driver_s *priv)
  ****************************************************************************/
 
 /****************************************************************************
- * Function: stm32_caninitialize
+ * Function: stm32_fdcansockinitialize
  *
  * Description:
- *   Initialize the CAN controller and driver
+ *   Initialize the selected CAN peripheral and network (socket) interface
  *
  * Input Parameters:
- *   intf - In the case where there are multiple transceivers, this value
- *          identifies which transceiver is to be initialized.
+ *   intf - In the case where there are multiple interfaces, this value
+ *          identifies which interface is to be initialized.
  *
  * Returned Value:
  *   OK on success; Negated errno on failure.
@@ -2109,16 +2135,16 @@ static void fdcan_reset(struct stm32_driver_s *priv)
  *
  ****************************************************************************/
 
-int stm32_caninitialize(int intf)
+int stm32_fdcansockinitialize(int intf)
 {
-  struct stm32_driver_s *priv;
+  struct fdcan_driver_s *priv;
 
   switch (intf)
     {
 #ifdef CONFIG_STM32H7_FDCAN1
     case 0:
       priv             = &g_fdcan0;
-      memset(priv, 0, sizeof(struct stm32_driver_s));
+      memset(priv, 0, sizeof(struct fdcan_driver_s));
       priv->base       = STM32_FDCAN1_BASE;
       priv->iface_idx  = 0;
       priv->config     = &stm32_fdcan0_config;
@@ -2137,7 +2163,7 @@ int stm32_caninitialize(int intf)
 #ifdef CONFIG_STM32H7_FDCAN2
     case 1:
       priv             = &g_fdcan1;
-      memset(priv, 0, sizeof(struct stm32_driver_s));
+      memset(priv, 0, sizeof(struct fdcan_driver_s));
       priv->base       = STM32_FDCAN2_BASE;
       priv->iface_idx  = 1;
       priv->config     = &stm32_fdcan1_config;
@@ -2153,18 +2179,37 @@ int stm32_caninitialize(int intf)
       break;
 #endif
 
+#ifdef CONFIG_STM32H7_FDCAN3
+    case 2:
+      priv             = &g_fdcan2
+      memset(priv, 0, sizeof(struct fdcan_driver_s));
+      priv->base       = STM32_FDCAN3_BASE;
+      priv->iface_idx  = 2;
+      priv->config     = &stm32_fdcan2_config;
+
+      /* Default bitrate configuration */
+
+#  ifdef CONFIG_NET_CAN_CANFD
+      priv->arbi_timing.bitrate = CONFIG_FDCAN3_ARBI_BITRATE;
+      priv->data_timing.bitrate = CONFIG_FDCAN3_DATA_BITRATE;
+#  else
+      priv->arbi_timing.bitrate = CONFIG_FDCAN3_BITRATE;
+#  endif
+      break;
+#endif
+
     default:
       return -ENODEV;
     }
 
-  if (fdcan_bittiming(&priv->arbi_timing, false) != OK)
+  if (fdcan_bittiming(&priv->arbi_timing) != OK)
     {
       printf("ERROR: Invalid CAN timings\n");
       return -1;
     }
 
 #ifdef CONFIG_NET_CAN_CANFD
-  if (fdcan_bittiming(&priv->data_timing, true) != OK)
+  if (fdcan_bittiming(&priv->data_timing) != OK)
     {
       printf("ERROR: Invalid CAN data phase timings\n");
       return -1;
@@ -2204,19 +2249,12 @@ int stm32_caninitialize(int intf)
 #endif
   priv->dev.d_private = (void *)priv;   /* Used to recover private state from dev */
 
-#ifdef CONFIG_NET_CAN_CANFD
-  priv->txdesc = (struct canfd_frame *)&g_tx_pool;
-  priv->rxdesc = (struct canfd_frame *)&g_rx_pool;
-#else
-  priv->txdesc = (struct can_frame *)&g_tx_pool;
-  priv->rxdesc = (struct can_frame *)&g_rx_pool;
-#endif
+  priv->dev.d_buf = priv->tx_pool;
 
-  priv->dev.d_buf = (uint8_t *)priv->txdesc;
+  priv->rx = NULL;
+  priv->tx = NULL;
 
-  fdcan_hw_initialize(priv);
-
-  /* Put the interface in the down state (disable interrupts, enter sleep mode) */
+  /* Put the interface in the down state (disable interrupts, power off) */
 
   fdcan_ifdown(&priv->dev);
 
@@ -2246,11 +2284,15 @@ int stm32_caninitialize(int intf)
 void arm_netinitialize(void)
 {
 #ifdef CONFIG_STM32H7_FDCAN1
-  stm32_caninitialize(0);
+  stm32_fdcansockinitialize(0);
 #endif
 
 #ifdef CONFIG_STM32H7_FDCAN2
-  stm32_caninitialize(1);
+  stm32_fdcansockinitialize(1);
+#endif
+
+#ifdef CONFIG_STM32H7_FDCAN3
+  stm32_fdcansockinitialize(2);
 #endif
 }
 #endif
