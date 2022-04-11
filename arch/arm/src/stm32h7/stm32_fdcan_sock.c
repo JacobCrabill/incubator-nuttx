@@ -1409,6 +1409,7 @@ static void fdcan_txtimeout_expiry(wdparm_t arg)
  *
  * Description:
  *   Reset the periheral bus clock used by FDCAN
+ *   Note that this will reset all configuration of all FDCAN peripherals
  *
  ****************************************************************************/
 

@@ -9,7 +9,7 @@
  * License.  You may obtain a copy of the License at
  *
  *   http://www.apache.org/licenses/LICENSE-2.0
- *s
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
  * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
@@ -50,16 +50,16 @@ extern "C"
 #define EXTERN extern
 #endif
 
-#if !defined(CONFIG_NETDEV_LATEINIT)
+#ifndef CONFIG_NETDEV_LATEINIT
 
 /************************************************************************************
  * Function: arm_netinitialize
  *
  * Description:
- *   Initialize the first network interface.  If there are more than one
+ *   Initialize the first network interface.  If there is more than one
  *   interface in the chip, then board-specific logic will have to provide
- *   this function to determine which, if any, Ethernet controllers should
- *   be initialized.  Also prototyped in up_internal.h.
+ *   this function to determine which, if any, CAN interfaces should be
+ *   initialized.  Also prototyped in up_internal.h.
  *
  * Input Parameters:
  *   None
@@ -83,8 +83,8 @@ void arm_netinitialize(void);
  *   Initialize the CAN controller and driver
  *
  * Input Parameters:
- *   intf - In the case where there are multiple CAN devices, this value
- *          identifies which CAN device is to be initialized.
+ *   intf - In the case where there are multiple CAN interfaces, this value
+ *          identifies which CAN interface is to be initialized.
  *
  * Returned Value:
  *   OK on success; Negated errno on failure.
@@ -104,4 +104,4 @@ int stm32_fdcansockinitialize(int intf);
 
 #endif /* __ASSEMBLY__ */
 #endif /* CONFIG_STM32H7_FDCAN */
-#endif /* __ARCH_ARM_SRC_STM32H7_STM32_FDCAN_H */
+#endif /* __ARCH_ARM_SRC_STM32H7_STM32_FDCAN_SOCK_H */
