@@ -59,20 +59,22 @@
 
 /* General Configuration ****************************************************/
 
+#if !defined(CONFIG_SCHED_WORKQUEUE)
+#  error Work queue support is required; HPWORK is recommended
+#endif
+
 #ifdef CONFIG_NET_CAN_RAW_TX_DEADLINE
-
-#  if !defined(CONFIG_SCHED_WORKQUEUE)
-#    error Work queue support is required
-#  endif
-
-#define TX_TIMEOUT_WQ
+#  define TX_TIMEOUT_WQ
 #endif
 
 /* If processing is not done at the interrupt level, then work queue support
  * is required.
+ *
+ * The high-priority work queue is suggested in order to minimize latency of
+ * critical Rx/Tx transactions on the CAN bus.
  */
 
-#define CANWORK LPWORK
+#define CANWORK HPWORK
 
 /* Message RAM Configuration ************************************************/
 
@@ -355,8 +357,11 @@ struct fdcan_driver_s
 
   /* Work queue configs for deferring interrupt and poll work */
 
-  struct work_s irqwork;
+  struct work_s rxwork;
+  struct work_s txcwork;
   struct work_s pollwork;
+
+  uint32_t irflags;                     /* Used to copy IR flags from IRQ context to work_queue */
 
   /* Intermediate storage of Tx / Rx frames outside of Message RAM */
 
@@ -419,12 +424,13 @@ static void fdcan_disable_interrupts(struct fdcan_driver_s *priv);
 /* Interrupt handling */
 
 static void fdcan_receive(FAR struct fdcan_driver_s *priv);
+static void fdcan_receive_work(FAR void *priv);
 static void fdcan_txdone(FAR struct fdcan_driver_s *priv);
 
 static int  fdcan_interrupt(int irq, FAR void *context,
                             FAR void *arg);
 
-static void fdcan_check_errors_isr(FAR struct fdcan_driver_s *priv);
+static void fdcan_check_errors(FAR struct fdcan_driver_s *priv);
 
 /* Watchdog timer expirations */
 
@@ -948,6 +954,56 @@ static int fdcan_txpoll(struct net_driver_s *dev)
  *
  * Description:
  *   An interrupt was received indicating the availability of a new RX packet
+ *   Schedule the message receipt and socket notification
+ *
+ * Input Parameters:
+ *   priv  - Reference to the driver state structure
+ *
+ ****************************************************************************/
+
+static void fdcan_receive(FAR struct fdcan_driver_s *priv)
+{
+  /* Check the interrupt value to determine which FIFO to read */
+
+  uint32_t regval = getreg32(priv->base + STM32_FDCAN_IR_OFFSET);
+
+  const uint32_t ir_fifo0 = FDCAN_IR_RF0N | FDCAN_IR_RF0F;
+  const uint32_t ir_fifo1 = FDCAN_IR_RF1N | FDCAN_IR_RF1F;
+
+  if (regval & ir_fifo0)
+    {
+      regval = ir_fifo0;
+    }
+  else if (regval & ir_fifo1)
+    {
+      regval = ir_fifo1;
+    }
+  else
+    {
+      nerr("ERROR: Bad RX IR flags");
+      return;
+    }
+
+  /* Store the Rx FIFO IR flags for use in the deferred work function */
+
+  priv->irflags = regval;
+
+  /* Write the corresponding interrupt bits to reset these interrupts */
+
+  putreg32(regval, priv->base + STM32_FDCAN_IR_OFFSET);
+
+  /* Schedule the actual Rx work immediately from HPWORK context */
+
+  work_queue(CANWORK, &priv->rxwork, fdcan_receive_work, priv, 0);
+}
+
+/****************************************************************************
+ * Function: fdcan_receive_work
+ *
+ * Description:
+ *   An frame was received; read the frame into the intermediate rx_pool and
+ *   notify the upper-half driver.
+ *   While we're here, also check for errors and timeouts.
  *
  * Input Parameters:
  *   priv  - Reference to the driver state structure
@@ -956,37 +1012,38 @@ static int fdcan_txpoll(struct net_driver_s *dev)
  *   None
  *
  * Assumptions:
- *   Global interrupts are disabled by interrupt handling logic.
+ *   Scheduled in worker thread (HPWORK / LPWORK)
  *
  ****************************************************************************/
 
-static void fdcan_receive(FAR struct fdcan_driver_s *priv)
+static void fdcan_receive_work(FAR void *arg)
 {
-  uint32_t regval = getreg32(priv->base + STM32_FDCAN_IR_OFFSET);
+  irqstate_t flags = enter_critical_section();
+
+  FAR struct fdcan_driver_s *priv = (FAR struct fdcan_driver_s *)arg;
+
+  /* Check which FIFO triggered this work */
+
+  uint32_t irflags = priv->irflags;
 
   const uint32_t ir_fifo0 = FDCAN_IR_RF0N | FDCAN_IR_RF0F;
   const uint32_t ir_fifo1 = FDCAN_IR_RF1N | FDCAN_IR_RF1F;
   uint8_t fifo_id;
 
-  if (regval & ir_fifo0)
+  if (irflags & ir_fifo0)
     {
-      regval = ir_fifo0;
       fifo_id = 0;
     }
-  else if (regval & ir_fifo1)
+  else if (irflags & ir_fifo1)
     {
-      regval = ir_fifo1;
       fifo_id = 1;
     }
   else
     {
       nerr("ERROR: Bad RX IR flags");
+      leave_critical_section(flags);
       return;
     }
-
-  /* Write the corresponding interrupt bits to reset them */
-
-  putreg32(regval, priv->base + STM32_FDCAN_IR_OFFSET);
 
   /* Bitwise register definitions are the same for FIFO 0/1
    *
@@ -1014,6 +1071,7 @@ static void fdcan_receive(FAR struct fdcan_driver_s *priv)
   if ((*rxfnc & FDCAN_RXF0C_F0S) == 0)
     {
       nerr("ERROR: No RX FIFO elements allocated");
+      leave_critical_section(flags);
       return;
     }
 
@@ -1031,6 +1089,7 @@ static void fdcan_receive(FAR struct fdcan_driver_s *priv)
   if (n_elem == 0)
     {
       nerr("RX interrupt but 0 frames available");
+      leave_critical_section(flags);
       return;
     }
 
@@ -1142,9 +1201,11 @@ static void fdcan_receive(FAR struct fdcan_driver_s *priv)
       priv->dev.d_buf = priv->tx_pool;
     }
 
-  /* update_event_.signalFromInterrupt(); */
+  /* Check for errors and abort-transmission requests */
 
-  fdcan_check_errors_isr(priv);
+  fdcan_check_errors(priv);
+
+  leave_critical_section(flags);
 }
 
 /****************************************************************************
@@ -1217,7 +1278,7 @@ static void fdcan_txdone(FAR struct fdcan_driver_s *priv)
 
   /* Check for errors and abort-transmission requests */
 
-  fdcan_check_errors_isr(priv);
+  fdcan_check_errors(priv);
 
   /* There should be space for a new TX in any event
    * Poll the network for new data to transmit
@@ -1286,7 +1347,7 @@ static int fdcan_interrupt(int irq, FAR void *context,
 }
 
 /****************************************************************************
- * Function: fdcan_check_errors_isr
+ * Function: fdcan_check_errors
  *
  * Description:
  *   Check error flags and cancel any timed out transmissions
@@ -1298,7 +1359,7 @@ static int fdcan_interrupt(int irq, FAR void *context,
  *  Called from interrupt context
  ****************************************************************************/
 
-static void fdcan_check_errors_isr(FAR struct fdcan_driver_s *priv)
+static void fdcan_check_errors(FAR struct fdcan_driver_s *priv)
 {
   /* Read CAN Error Logging counter (This also resets the error counter) */
 
@@ -1383,7 +1444,7 @@ static void fdcan_txtimeout_work(FAR void *arg)
         }
     }
 
-  fdcan_check_errors_isr(priv);
+  fdcan_check_errors(priv);
 }
 
 /****************************************************************************
@@ -1406,7 +1467,7 @@ static void fdcan_txtimeout_expiry(wdparm_t arg)
 
   /* Schedule to perform the TX timeout processing on the worker thread */
 
-  work_queue(CANWORK, &priv->irqwork, fdcan_txtimeout_work, priv, 0);
+  work_queue(CANWORK, &priv->txcwork, fdcan_txtimeout_work, priv, 0);
 }
 #endif
 
