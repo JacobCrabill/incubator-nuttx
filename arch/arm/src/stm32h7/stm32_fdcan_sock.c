@@ -359,6 +359,7 @@ struct fdcan_driver_s
 
   struct work_s rxwork;
   struct work_s txcwork;
+  struct work_s txdwork;
   struct work_s pollwork;
 
   uint32_t irflags;                     /* Used to copy IR flags from IRQ context to work_queue */
@@ -424,8 +425,9 @@ static void fdcan_disable_interrupts(struct fdcan_driver_s *priv);
 /* Interrupt handling */
 
 static void fdcan_receive(FAR struct fdcan_driver_s *priv);
-static void fdcan_receive_work(FAR void *priv);
+static void fdcan_receive_work(FAR void *arg);
 static void fdcan_txdone(FAR struct fdcan_driver_s *priv);
+static void fdcan_txdone_work(FAR void *arg);
 
 static int  fdcan_interrupt(int irq, FAR void *context,
                             FAR void *arg);
@@ -1221,13 +1223,14 @@ static void fdcan_receive_work(FAR void *arg)
  *   None
  *
  * Assumptions:
- *   Global interrupts are disabled by the watchdog logic.
- *   The network is locked.
+ *   Called from interrupt context
  *
  ****************************************************************************/
 
 static void fdcan_txdone(FAR struct fdcan_driver_s *priv)
 {
+  /* Read and reset the interrupt flag */
+
   uint32_t ir = getreg32(priv->base + STM32_FDCAN_IR_OFFSET);
   if (ir & FDCAN_IR_TC)
     {
@@ -1239,7 +1242,34 @@ static void fdcan_txdone(FAR struct fdcan_driver_s *priv)
       return;
     }
 
-  /* Process TX completions */
+  /* Schedule to perform the TX timeout processing on the worker thread */
+
+  work_queue(CANWORK, &priv->txdwork, fdcan_txdone_work, priv, 0);
+}
+
+/****************************************************************************
+ * Function: fdcan_txdone_work
+ *
+ * Description:
+ *   Process completed transmissions, including canceling their watchdog
+ *   timers if applicable
+ *
+ * Input Parameters:
+ *   priv  - Reference to the driver state structure
+ *
+ * Returned Value:
+ *   None
+ *
+ * Assumptions:
+ *   Scheduled in worker thread (HPWORK / LPWORK)
+ *
+ ****************************************************************************/
+
+static void fdcan_txdone_work(FAR void *arg)
+{
+  irqstate_t flags = enter_critical_section();
+
+  FAR struct fdcan_driver_s *priv = (FAR struct fdcan_driver_s *)arg;
 
   /* Update counters for successful transmissions */
 
@@ -1252,8 +1282,6 @@ static void fdcan_txdone(FAR struct fdcan_driver_s *priv)
            * Check that it's a new transmission, not a previously handled
            * transmission
            */
-
-          /* TODO: Verify handling of timeouts and cancellations */
 
           struct txmbstats *txi = &priv->txmb[i];
 
@@ -1285,6 +1313,8 @@ static void fdcan_txdone(FAR struct fdcan_driver_s *priv)
    */
 
   devif_poll(&priv->dev, fdcan_txpoll);
+
+  leave_critical_section(flags);
 }
 
 /****************************************************************************
@@ -1356,7 +1386,10 @@ static int fdcan_interrupt(int irq, FAR void *context,
  *   priv  - Reference to the driver state structure
  *
  * Assumptions:
- *  Called from interrupt context
+ *   May or may not be called from an interrupt handler.  In either case,
+ *   global interrupts are disabled, either explicitly or indirectly through
+ *   interrupt handling logic.
+ *
  ****************************************************************************/
 
 static void fdcan_check_errors(FAR struct fdcan_driver_s *priv)
